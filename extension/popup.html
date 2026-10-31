@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>sushLoad</title>
+<link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="popup.css"></head>
+<body>
+<div class="head"><img src="icons/32.png" width="20" height="20" alt=""><b>sushLoad</b></div>
+<div class="frow">
+  <div class="flabel"><div data-i18n="popupCapture">Take over downloads</div>
+    <div class="muted small" data-i18n="popupCaptureHint"></div></div>
+  <button class="switch" id="sw" role="switch" aria-checked="true"><i></i></button>
+</div>
+<div class="frow"><div id="status"><span class="dot" id="dot"></span><span id="stext" data-i18n="statusChecking"></span></div></div>
+<div class="btns">
+  <button class="btn primary" id="open" data-i18n="popupOpen">Open sushLoad</button>
+  <button class="btn" id="opts" data-i18n="popupOptions">Options</button>
+</div>
+<script type="module" src="popup.js"></script>
+</body></html>

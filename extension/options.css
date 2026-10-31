@@ -1,0 +1,5 @@
+main { max-width: 640px; margin: 0 auto; padding: 24px 20px 40px; }
+h1 { font-size: 17px; font-weight: 600; margin: 0 0 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 4px 16px; }
+.num { width: 90px; }
+.ok { color: var(--ok); min-height: 18px; padding-top: 10px; }

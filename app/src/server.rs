@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use sushload_core::{
-    DownloadId, DownloadView, Engine, ProxyMode, Settings, Status, validate_proxy_url,
+    AddRequest, DownloadId, DownloadView, Engine, ProxyMode, Settings, Status, validate_proxy_url,
 };
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -15,10 +15,13 @@ const STYLE_CSS: &str = include_str!("../web/style.css");
 const APP_JS: &str = include_str!("../web/app.js");
 
 const MAX_BODY: usize = 1024 * 1024;
+const MAX_ITEMS: usize = 500;
 
 /// What the HTTP layer needs from the engine and the OS. `Engine` implements it; tests use a mock.
 pub trait Backend: Send + Sync + 'static {
     fn add(&self, url: &str) -> Result<u64, String>;
+    /// A download handed over by the browser extension (file name, Referer, cookies, UA).
+    fn add_request(&self, req: AddRequest) -> Result<u64, String>;
     fn pause(&self, id: u64);
     fn resume(&self, id: u64);
     fn remove(&self, id: u64, delete_file: bool);
@@ -30,11 +33,16 @@ pub trait Backend: Send + Sync + 'static {
     fn set_settings(&self, s: Settings);
     fn open_path(&self, path: &Path, reveal: bool);
     fn choose_dir(&self) -> Option<String>;
+    /// Shows the bundled browser extension folder in Finder.
+    fn reveal_extension(&self) -> Result<(), String>;
 }
 
 impl Backend for Engine {
     fn add(&self, url: &str) -> Result<u64, String> {
         Engine::add(self, url).map(|id| id.0)
+    }
+    fn add_request(&self, req: AddRequest) -> Result<u64, String> {
+        Engine::add_request(self, req).map(|id| id.0)
     }
     fn pause(&self, id: u64) {
         Engine::pause(self, DownloadId(id))
@@ -88,6 +96,19 @@ impl Backend for Engine {
         } else {
             s
         })
+    }
+    fn reveal_extension(&self) -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let dir = crate::nativehost::extension_dir(&exe)
+            .ok_or("the extension folder was not found next to the app")?;
+        Command::new("open")
+            .arg("-R")
+            .arg(&dir)
+            .spawn()
+            .map(|mut c| {
+                let _ = c.wait();
+            })
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -312,6 +333,34 @@ pub fn handle<B: Backend>(
             }
             json_resp(200, json!({ "added": added, "errors": errors }))
         }
+        ("POST", "/api/add_request") => {
+            let Some(items) = parsed.get("items").and_then(Value::as_array) else {
+                return err(400, "items missing");
+            };
+            if items.len() > MAX_ITEMS {
+                return err(400, "too many items");
+            }
+            let mut added = 0u32;
+            let mut errors = Vec::new();
+            for item in items {
+                // Errors name the URL only; cookies never leave the request.
+                match serde_json::from_value::<AddRequest>(item.clone()) {
+                    Ok(req) => {
+                        let url = req.url.clone();
+                        match b.add_request(req) {
+                            Ok(_) => added += 1,
+                            Err(e) => errors.push(format!("{url}: {e}")),
+                        }
+                    }
+                    Err(_) => errors.push("invalid item".to_string()),
+                }
+            }
+            json_resp(200, json!({ "added": added, "errors": errors }))
+        }
+        ("POST", "/api/reveal_extension") => match b.reveal_extension() {
+            Ok(()) => json_resp(200, json!({ "ok": true })),
+            Err(e) => err(404, &e),
+        },
         ("POST", "/api/pause") | ("POST", "/api/resume") | ("POST", "/api/remove") => {
             let Some(id) = id_of(&parsed) else {
                 return err(400, "id missing");
@@ -462,6 +511,7 @@ mod tests {
     #[derive(Default)]
     struct Mock {
         added: Mutex<Vec<String>>,
+        requests: Mutex<Vec<AddRequest>>,
         settings: Mutex<Option<Settings>>,
         removed: Mutex<Vec<(u64, bool)>>,
     }
@@ -473,6 +523,14 @@ mod tests {
             }
             let mut a = self.added.lock().unwrap();
             a.push(url.to_string());
+            Ok(a.len() as u64)
+        }
+        fn add_request(&self, req: AddRequest) -> Result<u64, String> {
+            if !req.url.starts_with("http") {
+                return Err("invalid URL".into());
+            }
+            let mut a = self.requests.lock().unwrap();
+            a.push(req);
             Ok(a.len() as u64)
         }
         fn pause(&self, _: u64) {}
@@ -517,6 +575,9 @@ mod tests {
         fn open_path(&self, _: &Path, _: bool) {}
         fn choose_dir(&self) -> Option<String> {
             None
+        }
+        fn reveal_extension(&self) -> Result<(), String> {
+            Ok(())
         }
     }
 
@@ -609,6 +670,65 @@ mod tests {
         assert_eq!(
             *c.backend.added.lock().unwrap(),
             vec!["http://a.test/1.zip", "http://b.test/2.zip"]
+        );
+    }
+
+    #[test]
+    fn add_request_passes_browser_context() {
+        let c = ctx();
+        assert_eq!(call(&c, "POST", "/api/add_request", None, "{}").status, 401);
+        let body = json!({"items": [
+            {"url": "https://a.test/f.zip", "file_name": "f.zip", "referer": "https://a.test/",
+             "cookies": "sid=SECRET1; x=y", "user_agent": "UA/1"},
+            {"url": "https://b.test/g.iso"},
+            {"url": "ftp://c.test/h.bin", "cookies": "sid=SECRET2"},
+            {"url": 5}
+        ]})
+        .to_string();
+        let r = call(&c, "POST", "/api/add_request", Some("tok123"), &body);
+        assert_eq!(r.status, 200);
+        let text = String::from_utf8(r.body.clone()).unwrap();
+        assert!(
+            !text.contains("SECRET"),
+            "cookies leaked in the reply: {text}"
+        );
+        let v: Value = serde_json::from_slice(&r.body).unwrap();
+        assert_eq!(v["added"], 2);
+        assert_eq!(v["errors"].as_array().unwrap().len(), 2);
+        let got = c.backend.requests.lock().unwrap().clone();
+        assert_eq!(got[0].file_name.as_deref(), Some("f.zip"));
+        assert_eq!(got[0].referer.as_deref(), Some("https://a.test/"));
+        assert_eq!(got[0].cookies.as_deref(), Some("sid=SECRET1; x=y"));
+        assert_eq!(got[0].user_agent.as_deref(), Some("UA/1"));
+        assert_eq!(got[1].cookies, None);
+        assert_eq!(
+            call(&c, "POST", "/api/add_request", Some("tok123"), "{}").status,
+            400
+        );
+        let many = json!({"items": vec![json!({"url": "http://x.test/a"}); MAX_ITEMS + 1]});
+        assert_eq!(
+            call(
+                &c,
+                "POST",
+                "/api/add_request",
+                Some("tok123"),
+                &many.to_string()
+            )
+            .status,
+            400
+        );
+    }
+
+    #[test]
+    fn reveal_extension_needs_token() {
+        let c = ctx();
+        assert_eq!(
+            call(&c, "POST", "/api/reveal_extension", None, "").status,
+            401
+        );
+        assert_eq!(
+            call(&c, "POST", "/api/reveal_extension", Some("tok123"), "").status,
+            200
         );
     }
 

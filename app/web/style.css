@@ -173,3 +173,4 @@ select.field { padding-inline-end: 6px; }
 .sectitle { font-weight: 600; }
 .frow.sechead { padding-bottom: 6px; border-bottom: 0; }
 #pCustom { border-top: 0; }
+.steps > div { padding: 1px 0; }

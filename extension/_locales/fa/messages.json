@@ -1,0 +1,221 @@
+{
+  "extName": {
+    "message": "sushLoad"
+  },
+  "extDescription": {
+    "message": "دانلودهای Chrome، Brave و Edge را به مدیر دانلود sushLoad می‌فرستد."
+  },
+  "actionTitle": {
+    "message": "sushLoad"
+  },
+  "menuLink": {
+    "message": "دانلود با sushLoad"
+  },
+  "menuAll": {
+    "message": "دانلود همهٔ لینک‌ها با sushLoad"
+  },
+  "offerHeading": {
+    "message": "این فایل با sushLoad دانلود شود؟"
+  },
+  "offerUse": {
+    "message": "دانلود با sushLoad"
+  },
+  "offerChrome": {
+    "message": "بگذار مرورگر دانلود کند"
+  },
+  "offerRemember": {
+    "message": "برای «.$P1$» دیگر نپرس",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "offerFrom": {
+    "message": "از $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "offerUnknownSize": {
+    "message": "حجم نامشخص"
+  },
+  "offerFailed": {
+    "message": "تحویل به sushLoad ممکن نشد: $P1$ مرورگر خودش دانلود می‌کند.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "offerSending": {
+    "message": "در حال ارسال…"
+  },
+  "offerClose": {
+    "message": "بستن"
+  },
+  "popupCapture": {
+    "message": "گرفتن دانلودها"
+  },
+  "popupCaptureHint": {
+    "message": "پیش از دانلود فایل‌های فشرده، ویدیو، برنامه و … از شما می‌پرسد."
+  },
+  "popupOpen": {
+    "message": "باز کردن sushLoad"
+  },
+  "popupOptions": {
+    "message": "تنظیمات"
+  },
+  "statusChecking": {
+    "message": "در حال بررسی sushLoad…"
+  },
+  "statusRunning": {
+    "message": "sushLoad در حال اجراست"
+  },
+  "statusIdle": {
+    "message": "sushLoad بسته است؛ در صورت نیاز باز می‌شود"
+  },
+  "statusMissing": {
+    "message": "ارتباط با sushLoad برقرار نشد. برنامه را یک بار باز کنید و افزونه را دوباره بارگذاری کنید."
+  },
+  "linksTitle": {
+    "message": "دانلود همهٔ لینک‌ها"
+  },
+  "linksFilter": {
+    "message": "جستجو…"
+  },
+  "linksSelectAll": {
+    "message": "انتخاب همه"
+  },
+  "linksSelectNone": {
+    "message": "هیچ‌کدام"
+  },
+  "linksDownload": {
+    "message": "دانلود $P1$ مورد انتخاب‌شده",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "linksCount": {
+    "message": "$P1$ از $P2$ لینک",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "linksNone": {
+    "message": "لینکی در این صفحه پیدا نشد."
+  },
+  "linksSent": {
+    "message": "$P1$ مورد به sushLoad فرستاده شد",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "typeAll": {
+    "message": "همهٔ نوع‌ها"
+  },
+  "typeArchives": {
+    "message": "فشرده"
+  },
+  "typePrograms": {
+    "message": "برنامه‌ها"
+  },
+  "typeVideo": {
+    "message": "ویدیو"
+  },
+  "typeMusic": {
+    "message": "موسیقی"
+  },
+  "typeDocuments": {
+    "message": "اسناد"
+  },
+  "typeImages": {
+    "message": "تصاویر"
+  },
+  "typeOther": {
+    "message": "سایر"
+  },
+  "panelDownload": {
+    "message": "دانلود این ویدیو"
+  },
+  "panelSent": {
+    "message": "به sushLoad فرستاده شد"
+  },
+  "panelFailed": {
+    "message": "ارتباط با sushLoad ممکن نیست"
+  },
+  "panelHide": {
+    "message": "پنهان کردن"
+  },
+  "errNotHttp": {
+    "message": "فقط لینک‌های http و https قابل دانلود هستند."
+  },
+  "errNoHost": {
+    "message": "پیوند مرورگر به sushLoad نصب نیست. برنامهٔ sushLoad را یک بار باز کنید و افزونه را دوباره بارگذاری کنید."
+  },
+  "optTitle": {
+    "message": "تنظیمات sushLoad"
+  },
+  "optCapture": {
+    "message": "گرفتن دانلودها"
+  },
+  "optCaptureHint": {
+    "message": "دانلودهای مطابق را می‌گیرد و پیشنهاد می‌دهد به sushLoad بروند. برای یک بار رد شدن، هنگام کلیک روی لینک Alt را نگه دارید."
+  },
+  "optAsk": {
+    "message": "پیش از گرفتن بپرس"
+  },
+  "optAskHint": {
+    "message": "خاموش: دانلودهای مطابق مستقیم به sushLoad می‌روند."
+  },
+  "optTypes": {
+    "message": "نوع فایل‌ها"
+  },
+  "optTypesHint": {
+    "message": "پسوندها با فاصله یا ویرگول جدا شوند. پیش‌فرض: فشرده، برنامه، دیسک، ویدیو و موسیقی."
+  },
+  "optDocTypes": {
+    "message": "نوع اسناد"
+  },
+  "optDocTypesHint": {
+    "message": "فقط وقتی دست‌کم به حجم زیر برسند گرفته می‌شوند."
+  },
+  "optMinSize": {
+    "message": "حداقل حجم اسناد (مگابایت)"
+  },
+  "optSites": {
+    "message": "در این سایت‌ها هرگز نگیر"
+  },
+  "optSitesHint": {
+    "message": "هر خط یک میزبان، مثل example.com (زیردامنه‌ها هم شامل می‌شوند)."
+  },
+  "optRemembered": {
+    "message": "انتخاب‌های ذخیره‌شده"
+  },
+  "optRememberedNone": {
+    "message": "هیچ"
+  },
+  "optForget": {
+    "message": "فراموش کردن انتخاب‌ها"
+  },
+  "optSaved": {
+    "message": "ذخیره شد"
+  },
+  "choiceSush": {
+    "message": "sushLoad"
+  },
+  "choiceChrome": {
+    "message": "مرورگر"
+  }
+}

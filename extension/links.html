@@ -1,0 +1,19 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>sushLoad</title>
+<link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="links.css"></head>
+<body>
+<div class="bar">
+  <input class="field" id="q" data-i18n-ph="linksFilter" spellcheck="false" autocomplete="off">
+  <select class="field" id="type"></select>
+  <button class="btn" id="all" data-i18n="linksSelectAll"></button>
+  <button class="btn" id="none" data-i18n="linksSelectNone"></button>
+</div>
+<div class="list" id="list"></div>
+<div class="foot">
+  <span class="muted small" id="count"></span>
+  <span class="small" id="msg"></span>
+  <span class="grow"></span>
+  <button class="btn primary" id="go"></button>
+</div>
+<script type="module" src="links.js"></script>
+</body></html>

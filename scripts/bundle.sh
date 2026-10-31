@@ -22,6 +22,11 @@ rm -f "$APP/Contents/MacOS/sushload"
 cp "$BIN" "$APP/Contents/MacOS/sushload"
 chmod 755 "$APP/Contents/MacOS/sushload"
 
+# Browser extension: users load this folder unpacked (Settings > Browser > Show extension folder).
+rm -rf "$APP/Contents/Resources/extension"
+cp -R "$ROOT/extension" "$APP/Contents/Resources/extension"
+find "$APP/Contents/Resources/extension" -name '.DS_Store' -delete
+
 VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 VERSION="${VERSION:-0.1.0}"
 

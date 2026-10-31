@@ -49,6 +49,11 @@ const I18N = {
     proxyType: 'Type', typeHttp: 'HTTP', typeHttps: 'HTTPS', typeSocks5: 'SOCKS5', typeSocks5h: 'SOCKS5 + remote DNS',
     host: 'Host', port: 'Port', username: 'Username', password: 'Password', optional: 'Optional', apply: 'Apply',
     proxyHint: 'Applies to new connections; running downloads keep their connection until paused.', via: 'via {v}',
+    browser: 'Browser', extension: 'Extension', extensionStatus: 'Install it once to send downloads from Chrome, Brave and Edge.',
+    showExtFolder: 'Show extension folder',
+    extStep1: '1. Open chrome://extensions (or brave://extensions, edge://extensions).',
+    extStep2: '2. Turn on Developer mode.',
+    extStep3: '3. Click “Load unpacked” and pick the folder Finder just showed.',
   },
   fa: {
     all: 'همه', downloading: 'در حال دانلود', queued: 'در صف', completed: 'کامل‌شده', pausedFailed: 'متوقف / ناموفق',
@@ -77,6 +82,11 @@ const I18N = {
     proxyType: 'نوع', typeHttp: 'HTTP', typeHttps: 'HTTPS', typeSocks5: 'SOCKS5', typeSocks5h: 'SOCKS5 + DNS از راه دور',
     host: 'میزبان', port: 'درگاه', username: 'نام کاربری', password: 'گذرواژه', optional: 'اختیاری', apply: 'اعمال',
     proxyHint: 'برای اتصال‌های جدید اعمال می‌شود؛ دانلودهای در حال اجرا تا زمان توقف، اتصال قبلی را نگه می‌دارند.', via: 'از طریق {v}',
+    browser: 'مرورگر', extension: 'افزونه', extensionStatus: 'یک بار نصبش کنید تا دانلودهای Chrome، Brave و Edge به sushLoad بیایند.',
+    showExtFolder: 'نمایش پوشهٔ افزونه',
+    extStep1: '۱. صفحهٔ chrome://extensions را باز کنید (یا brave://extensions، edge://extensions).',
+    extStep2: '۲. حالت Developer mode را روشن کنید.',
+    extStep3: '۳. روی «Load unpacked» بزنید و همان پوشه‌ای را که Finder نشان داد انتخاب کنید.',
   },
 };
 let lang = lstore.get('sushload_lang') === 'fa' ? 'fa' : 'en';
@@ -765,6 +775,9 @@ $('#sChoose').addEventListener('click', async () => {
     const r = await api('/api/choose_dir', {});
     if (r && r.path) { S.dir.value = r.path; saveSettings(); }
   } catch (e) { toast(e.message); }
+});
+$('#bShowExt').addEventListener('click', async () => {
+  try { await api('/api/reveal_extension', {}); } catch (e) { toast(e.message); }
 });
 $('#pMode').addEventListener('change', () => {
   const custom = $('#pMode').value === 'custom';

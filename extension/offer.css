@@ -1,0 +1,9 @@
+body { padding: 16px 18px 14px; overflow: hidden; }
+.top { display: flex; gap: 12px; align-items: flex-start; }
+.info { min-width: 0; flex: 1; }
+.name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 1px 0; }
+.meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.remember { display: flex; align-items: center; gap: 8px; margin-top: 14px; color: var(--muted); }
+.err { color: var(--err); margin-top: 8px; white-space: pre-wrap; }
+.btns { position: fixed; bottom: 14px; inset-inline: 18px; display: flex; gap: 8px; justify-content: flex-end; }
+.btns .primary { order: 2; }

@@ -1,0 +1,221 @@
+{
+  "extName": {
+    "message": "sushLoad"
+  },
+  "extDescription": {
+    "message": "Send downloads from Chrome, Brave and Edge to the sushLoad download manager."
+  },
+  "actionTitle": {
+    "message": "sushLoad"
+  },
+  "menuLink": {
+    "message": "Download with sushLoad"
+  },
+  "menuAll": {
+    "message": "Download all links with sushLoad"
+  },
+  "offerHeading": {
+    "message": "Download this file with sushLoad?"
+  },
+  "offerUse": {
+    "message": "Download with sushLoad"
+  },
+  "offerChrome": {
+    "message": "Let Chrome download"
+  },
+  "offerRemember": {
+    "message": "Don't ask again for .$P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "offerFrom": {
+    "message": "from $P1$",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "offerUnknownSize": {
+    "message": "Unknown size"
+  },
+  "offerFailed": {
+    "message": "Couldn't hand it to sushLoad: $P1$ The browser will download it instead.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "offerSending": {
+    "message": "Sending…"
+  },
+  "offerClose": {
+    "message": "Close"
+  },
+  "popupCapture": {
+    "message": "Take over downloads"
+  },
+  "popupCaptureHint": {
+    "message": "Ask before the browser downloads archives, videos, programs…"
+  },
+  "popupOpen": {
+    "message": "Open sushLoad"
+  },
+  "popupOptions": {
+    "message": "Options"
+  },
+  "statusChecking": {
+    "message": "Checking sushLoad…"
+  },
+  "statusRunning": {
+    "message": "sushLoad is running"
+  },
+  "statusIdle": {
+    "message": "sushLoad is closed; it opens when needed"
+  },
+  "statusMissing": {
+    "message": "Can't reach sushLoad. Open the app once, then reload this extension."
+  },
+  "linksTitle": {
+    "message": "Download all links"
+  },
+  "linksFilter": {
+    "message": "Filter…"
+  },
+  "linksSelectAll": {
+    "message": "Select all"
+  },
+  "linksSelectNone": {
+    "message": "Select none"
+  },
+  "linksDownload": {
+    "message": "Download $P1$ selected",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "linksCount": {
+    "message": "$P1$ of $P2$ links",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      },
+      "p2": {
+        "content": "$2"
+      }
+    }
+  },
+  "linksNone": {
+    "message": "No links found on this page."
+  },
+  "linksSent": {
+    "message": "Sent $P1$ to sushLoad",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
+  },
+  "typeAll": {
+    "message": "All types"
+  },
+  "typeArchives": {
+    "message": "Archives"
+  },
+  "typePrograms": {
+    "message": "Programs"
+  },
+  "typeVideo": {
+    "message": "Video"
+  },
+  "typeMusic": {
+    "message": "Music"
+  },
+  "typeDocuments": {
+    "message": "Documents"
+  },
+  "typeImages": {
+    "message": "Images"
+  },
+  "typeOther": {
+    "message": "Other"
+  },
+  "panelDownload": {
+    "message": "Download this video"
+  },
+  "panelSent": {
+    "message": "Sent to sushLoad"
+  },
+  "panelFailed": {
+    "message": "sushLoad isn't reachable"
+  },
+  "panelHide": {
+    "message": "Hide"
+  },
+  "errNotHttp": {
+    "message": "Only http(s) links can be downloaded."
+  },
+  "errNoHost": {
+    "message": "The browser link to sushLoad is not installed. Open the sushLoad app once, then reload this extension."
+  },
+  "optTitle": {
+    "message": "sushLoad options"
+  },
+  "optCapture": {
+    "message": "Take over downloads"
+  },
+  "optCaptureHint": {
+    "message": "Catch matching browser downloads and offer to send them to sushLoad. Hold Alt while clicking a link to skip this once."
+  },
+  "optAsk": {
+    "message": "Ask before taking over"
+  },
+  "optAskHint": {
+    "message": "Off: matching downloads go straight to sushLoad."
+  },
+  "optTypes": {
+    "message": "File types"
+  },
+  "optTypesHint": {
+    "message": "Extensions, separated by spaces or commas. Archives, programs, disk images, video and music by default."
+  },
+  "optDocTypes": {
+    "message": "Document types"
+  },
+  "optDocTypesHint": {
+    "message": "Only taken over when at least the size below."
+  },
+  "optMinSize": {
+    "message": "Minimum size for documents (MB)"
+  },
+  "optSites": {
+    "message": "Never take over on these sites"
+  },
+  "optSitesHint": {
+    "message": "One host per line, like example.com (subdomains included)."
+  },
+  "optRemembered": {
+    "message": "Remembered choices"
+  },
+  "optRememberedNone": {
+    "message": "None"
+  },
+  "optForget": {
+    "message": "Forget remembered choices"
+  },
+  "optSaved": {
+    "message": "Saved"
+  },
+  "choiceSush": {
+    "message": "sushLoad"
+  },
+  "choiceChrome": {
+    "message": "browser"
+  }
+}

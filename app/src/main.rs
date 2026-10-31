@@ -1,6 +1,7 @@
 //! sushLoad: a light download manager. `sushload` opens a native window; `sushload --web` serves the
 //! same UI to a browser instead.
 
+mod nativehost;
 mod server;
 mod window;
 
@@ -37,7 +38,9 @@ fn parse_args() -> Result<Args, String> {
                 a.port = v.parse().map_err(|_| format!("bad port: {v}"))?;
             }
             "-h" | "--help" => {
-                println!("usage: sushload [--web [--no-open]] [--port N]");
+                println!(
+                    "usage: sushload [--web [--no-open]] [--port N]\n       sushload --native-host [chrome-extension://ID/]   (browser extension bridge)"
+                );
                 std::process::exit(0);
             }
             // macOS passes -psn_* when launching a bundle from older Finders; ignore unknown -psn.
@@ -114,6 +117,18 @@ fn wait_for_signal(set: &libc::sigset_t) {
 }
 
 fn main() {
+    // Chrome starts the native host as `sushload chrome-extension://<id>/`; tests can use the flag.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(first) = argv.first()
+        && (first == "--native-host" || first.starts_with("chrome-extension://"))
+    {
+        let origin = if first == "--native-host" {
+            argv.get(1)
+        } else {
+            Some(first)
+        };
+        std::process::exit(nativehost::run(origin.map(String::as_str)));
+    }
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
@@ -140,6 +155,8 @@ fn main() {
         }
         return;
     }
+
+    nativehost::ensure_manifests();
 
     let sigset = args.web.then(block_signals);
 

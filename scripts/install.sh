@@ -9,4 +9,5 @@ cp -R "$ROOT/dist/sushLoad.app" /Applications/sushLoad.app
 
 mkdir -p "$HOME/.local/bin"
 ln -sf /Applications/sushLoad.app/Contents/MacOS/sushload "$HOME/.local/bin/sushload"
+"$ROOT/scripts/install-native-host.sh" /Applications/sushLoad.app/Contents/MacOS/sushload
 echo "Installed /Applications/sushLoad.app; run 'sushload --web' for the browser UI (make sure ~/.local/bin is on PATH)."
