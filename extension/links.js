@@ -83,7 +83,7 @@ $('go').addEventListener('click', async () => {
   const m = $('msg');
   if (res.ok) {
     m.className = 'small ok';
-    m.textContent = msg('linksSent', [String(res.added)]);
+    m.textContent = msg(res.confirm ? 'linksQueued' : 'linksSent', [String(res.added)]);
     setTimeout(() => window.close(), 1200);
   } else {
     m.className = 'small err';

@@ -129,7 +129,7 @@ async function onCreated(item) {
     referrer = t && isHttp(t.url) ? t.url : '';
   }
   const offer = { id: item.id, url, name: name || 'download', size, host: hostOf(url), referrer, ext: c.ext };
-  if (decisions[c.ext] === 'sush' || !s.ask) {
+  if (decisions[c.ext] === 'sush' || !s.askFirst) {
     const r = await takeOver(offer);
     if (r.ok) ok(-1);
     else { attempt(chrome.downloads.resume(item.id)); fail(-1); }

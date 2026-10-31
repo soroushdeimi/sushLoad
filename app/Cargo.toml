@@ -15,3 +15,7 @@ objc2-app-kit = "0.3"
 objc2-web-kit = "0.3"
 block2 = "0.6"
 libc = "0.2"
+log = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

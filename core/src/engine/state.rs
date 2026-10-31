@@ -33,6 +33,15 @@ pub struct DownloadRecord {
     pub cookies: Option<String>,
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// Folder chosen in the confirmation dialog (wins over the category folder).
+    #[serde(default)]
+    pub dir: Option<PathBuf>,
+    /// Replace an existing file instead of picking a free `name (1)`.
+    #[serde(default)]
+    pub overwrite: bool,
+    /// Category chosen in the confirmation dialog.
+    #[serde(default)]
+    pub category_override: Option<Category>,
 }
 
 /// The on-disk root object.

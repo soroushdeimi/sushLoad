@@ -12,8 +12,9 @@ mod state;
 mod util;
 
 use crate::categories;
-use crate::model::{AddRequest, DownloadId, DownloadView, Settings, Status};
-use client::Net;
+use crate::model::{AddRequest, DownloadId, DownloadView, Event, ProbeInfo, Settings, Status};
+use crate::redact::{redact_proxy, redact_url};
+use client::{Net, RequestContext};
 use ratelimit::RateLimiter;
 use state::{DownloadRecord, StateFile};
 use std::collections::HashMap;
@@ -21,6 +22,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
+
+pub use util::sanitize_file_name;
+
+/// Longest a probe may take, as seen by the engine runtime; callers wait a little longer.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+
+type EventHandler = Arc<dyn Fn(&Event) + Send + Sync>;
 
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -95,6 +103,9 @@ pub(crate) struct Inner {
     net: Mutex<NetSlot>,
     pub tx: mpsc::UnboundedSender<Command>,
     save_tx: std::sync::mpsc::Sender<SaveRequest>,
+    /// Set by the engine thread once its runtime exists; used to run probes.
+    handle: std::sync::OnceLock<tokio::runtime::Handle>,
+    events: Mutex<Option<EventHandler>>,
 }
 
 /// The client new downloads use, or why none can be built from the current proxy settings.
@@ -124,6 +135,14 @@ impl Inner {
                 slot.error = None;
             }
             Err(error) => slot.error = Some(error),
+        }
+    }
+
+    /// Tells the registered handler (if any) about a state change. Called outside any lock.
+    pub fn emit(&self, event: Event) {
+        let handler = lock(&self.events).clone();
+        if let Some(handler) = handler {
+            handler(&event);
         }
     }
 
@@ -223,7 +242,15 @@ impl Engine {
             net: Mutex::new(net),
             tx,
             save_tx,
+            handle: std::sync::OnceLock::new(),
+            events: Mutex::new(None),
         });
+        log::info!(
+            target: "engine",
+            "loaded {} download(s) from {}",
+            lock(&inner.state).downloads.len(),
+            data_dir.display()
+        );
 
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
         let thread_inner = Arc::clone(&inner);
@@ -242,6 +269,7 @@ impl Engine {
                         return;
                     }
                 };
+                let _ = thread_inner.handle.set(runtime.handle().clone());
                 if ready_tx.send(Ok(())).is_err() {
                     return;
                 }
@@ -264,34 +292,37 @@ impl Engine {
         })
     }
 
+    /// Registers the function that hears about completed and failed downloads. It runs on an
+    /// engine thread right after the state change, so it must be quick (spawn, don't wait).
+    pub fn set_event_handler(&self, handler: impl Fn(&Event) + Send + Sync + 'static) {
+        *lock(&self.inner.events) = Some(Arc::new(handler));
+    }
+
     /// Like `add`, with the browser's file name, Referer, cookies and User-Agent. The file name
     /// wins over the URL and Content-Disposition; the headers go only to the URL's own origin
     /// (cookies never follow a redirect to another origin) and are kept in `state.json`
-    /// (owner-only) but never exposed through `DownloadView` or errors.
+    /// (owner-only) but never exposed through `DownloadView` or errors. `dir`, `category`,
+    /// `start_paused` and `overwrite` come from the confirmation dialog.
     pub fn add_request(&self, request: AddRequest) -> Result<DownloadId, String> {
-        let url = request.url.trim();
-        let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err("only http and https URLs are supported".to_string());
-        }
-        if parsed.host_str().is_none_or(str::is_empty) {
-            return Err("URL has no host".to_string());
-        }
-        let referer = clean_header(request.referer, "Referer")?;
-        let cookies = clean_header(request.cookies, "cookies")?;
-        let user_agent = clean_header(request.user_agent, "User-Agent")?;
-        let fixed_name = request
-            .file_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(util::sanitize_file_name);
-
-        let name_fixed = fixed_name.is_some();
-        let file_name = fixed_name.unwrap_or_else(|| util::file_name_from_url(&parsed));
-        let category = categories::classify(&file_name);
+        let prepared = prepare(&request)?;
+        let name_fixed = prepared.fixed_name.is_some();
+        let file_name = prepared
+            .fixed_name
+            .unwrap_or_else(|| util::file_name_from_url(&prepared.parsed));
+        let category = request
+            .category
+            .unwrap_or_else(|| categories::classify(&file_name));
         let settings = { lock(&self.inner.state).settings.clone() };
-        let path = categories::destination_dir(&settings, &file_name).join(&file_name);
+        let dir = request
+            .dir
+            .clone()
+            .unwrap_or_else(|| categories::dir_for(&settings, category));
+        let path = dir.join(&file_name);
+        let status = if request.start_paused {
+            Status::Paused
+        } else {
+            Status::Queued
+        };
 
         let mut state = lock(&self.inner.state);
         let id = DownloadId(state.next_id);
@@ -299,11 +330,11 @@ impl Engine {
         state.downloads.push(Entry {
             record: DownloadRecord {
                 id,
-                url: url.to_string(),
-                file_name,
+                url: prepared.url.clone(),
+                file_name: file_name.clone(),
                 path,
                 category,
-                status: Status::Queued,
+                status,
                 total: None,
                 received: 0,
                 segments: Vec::new(),
@@ -313,9 +344,12 @@ impl Engine {
                 error: None,
                 added_at: now_secs(),
                 name_fixed,
-                referer,
-                cookies,
-                user_agent,
+                referer: prepared.referer,
+                cookies: prepared.cookies,
+                user_agent: prepared.user_agent,
+                dir: request.dir.clone(),
+                overwrite: request.overwrite,
+                category_override: request.category,
             },
             speed: 0,
             eta_secs: None,
@@ -324,9 +358,100 @@ impl Engine {
         });
         drop(state);
 
+        log::info!(
+            target: "engine",
+            "add id={} url={} name={} dir={} paused={} overwrite={}",
+            id.0,
+            redact_url(&prepared.url),
+            file_name,
+            request
+                .dir
+                .as_ref()
+                .map_or_else(|| "(default)".to_string(), |d| d.display().to_string()),
+            request.start_paused,
+            request.overwrite
+        );
         self.inner.persist();
-        let _ = self.inner.tx.send(Command::Schedule);
+        if !request.start_paused {
+            let _ = self.inner.tx.send(Command::Schedule);
+        }
         Ok(id)
+    }
+
+    /// One `Range: bytes=0-0` request (same headers and cookie rules as the download itself)
+    /// to learn name, size and resumability, plus where the file would go. Blocks the caller
+    /// for at most ~10 s; the request runs on the engine runtime.
+    pub fn probe(&self, request: &AddRequest) -> Result<ProbeInfo, String> {
+        let prepared = prepare(request)?;
+        let settings = self.settings();
+        let net = self.inner.net()?.with_context(RequestContext::new(
+            &prepared.url,
+            prepared.referer.clone(),
+            prepared.cookies.clone(),
+            prepared.user_agent.clone(),
+        ));
+        let handle = self.inner.handle.get().ok_or("engine is not running")?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let url = prepared.url.clone();
+        handle.spawn(async move {
+            // Keep the sender alive: a dropped one would read as "cancelled".
+            let (_keep, mut cancel) = tokio::sync::watch::channel(false);
+            let result =
+                tokio::time::timeout(PROBE_TIMEOUT, download::probe_once(&net, &url, &mut cancel))
+                    .await;
+            let _ = tx.send(match result {
+                Ok(Ok(probe)) => Ok(probe),
+                Ok(Err(download::ProbeError::Cancelled)) => Err("cancelled".to_string()),
+                Ok(Err(download::ProbeError::Retry(m) | download::ProbeError::Failed(m))) => Err(m),
+                Err(_) => Err("the server did not answer in time".to_string()),
+            });
+        });
+        let result = rx
+            .recv_timeout(PROBE_TIMEOUT + Duration::from_secs(2))
+            .map_err(|_| "the server did not answer in time".to_string())
+            .and_then(|r| r);
+        let probe = match result {
+            Ok(probe) => probe,
+            Err(error) => {
+                log::warn!(
+                    target: "engine",
+                    "probe {} failed: {}",
+                    redact_url(&prepared.url),
+                    crate::redact::redact_text(&error)
+                );
+                return Err(error);
+            }
+        };
+
+        let file_name = prepared
+            .fixed_name
+            .or(probe.file_name)
+            .unwrap_or_else(|| util::file_name_from_url(&prepared.parsed));
+        let category = request
+            .category
+            .unwrap_or_else(|| categories::classify(&file_name));
+        let dir = request
+            .dir
+            .clone()
+            .unwrap_or_else(|| categories::dir_for(&settings, category));
+        let exists = categories::name_taken(&dir, &file_name);
+        log::info!(
+            target: "engine",
+            "probe {} -> name={} size={} resumable={} exists={}",
+            redact_url(&prepared.url),
+            file_name,
+            probe.total.map_or_else(|| "unknown".to_string(), |t| t.to_string()),
+            probe.resumable,
+            exists
+        );
+        Ok(ProbeInfo {
+            file_name,
+            total: probe.total,
+            resumable: probe.resumable,
+            category,
+            dir,
+            exists,
+        })
     }
 
     pub fn pause(&self, id: DownloadId) {
@@ -347,6 +472,7 @@ impl Engine {
             }
         };
         if changed {
+            log::info!(target: "engine", "pause id={}", id.0);
             self.inner.persist();
         }
     }
@@ -365,6 +491,7 @@ impl Engine {
             }
         };
         if changed {
+            log::info!(target: "engine", "resume id={}", id.0);
             self.inner.persist();
             let _ = self.inner.tx.send(Command::Schedule);
         }
@@ -389,6 +516,7 @@ impl Engine {
             state.downloads.remove(position);
             paths
         };
+        log::info!(target: "engine", "remove id={} delete_file={}", id.0, delete_file);
         self.inner.persist();
         let _ = self.inner.tx.send(Command::DeleteFiles {
             part: paths.0,
@@ -472,13 +600,14 @@ impl Engine {
     }
 
     pub fn set_settings(&self, settings: Settings) {
-        let proxy_changed = {
+        let (proxy_changed, old) = {
             let mut state = lock(&self.inner.state);
             let changed = state.settings.proxy_mode != settings.proxy_mode
                 || state.settings.proxy_url != settings.proxy_url;
-            state.settings = settings.clone();
-            changed
+            let old = std::mem::replace(&mut state.settings, settings.clone());
+            (changed, old)
         };
+        log_settings_change(&old, &settings);
         if proxy_changed {
             self.inner.rebuild_client(&settings);
         }
@@ -494,6 +623,101 @@ impl Engine {
             let _ = ack_rx.recv_timeout(Duration::from_secs(2));
         }
     }
+}
+
+fn log_settings_change(old: &Settings, new: &Settings) {
+    if old == new {
+        return;
+    }
+    let mut changes: Vec<String> = Vec::new();
+    if old.download_dir != new.download_dir {
+        changes.push(format!("download_dir={}", new.download_dir.display()));
+    }
+    if old.sort_into_categories != new.sort_into_categories {
+        changes.push(format!("sort_into_categories={}", new.sort_into_categories));
+    }
+    if old.max_concurrent != new.max_concurrent {
+        changes.push(format!("max_concurrent={}", new.max_concurrent));
+    }
+    if old.connections != new.connections {
+        changes.push(format!("connections={}", new.connections));
+    }
+    if old.speed_limit != new.speed_limit {
+        changes.push(format!("speed_limit={}", new.speed_limit));
+    }
+    if old.proxy_mode != new.proxy_mode || old.proxy_url != new.proxy_url {
+        let url = if new.proxy_mode == crate::model::ProxyMode::Custom {
+            redact_proxy(&new.proxy_url)
+        } else {
+            "-".to_string()
+        };
+        changes.push(format!("proxy={:?} {url}", new.proxy_mode));
+    }
+    if old.confirm_new_downloads != new.confirm_new_downloads {
+        changes.push(format!(
+            "confirm_new_downloads={}",
+            new.confirm_new_downloads
+        ));
+    }
+    if old.notify_on_complete != new.notify_on_complete {
+        changes.push(format!("notify_on_complete={}", new.notify_on_complete));
+    }
+    if old.category_dirs != new.category_dirs {
+        let mut dirs: Vec<String> = new
+            .category_dirs
+            .iter()
+            .map(|(c, d)| format!("{}={}", c.label(), d.display()))
+            .collect();
+        dirs.sort();
+        changes.push(format!("category_dirs=[{}]", dirs.join(", ")));
+    }
+    log::info!(target: "engine", "settings changed: {}", changes.join("; "));
+}
+
+/// A request that passed validation, with its headers cleaned.
+struct Prepared {
+    url: String,
+    parsed: reqwest::Url,
+    referer: Option<String>,
+    cookies: Option<String>,
+    user_agent: Option<String>,
+    fixed_name: Option<String>,
+}
+
+/// Checks URL, headers and folder of a request without touching the engine.
+fn prepare(request: &AddRequest) -> Result<Prepared, String> {
+    let url = request.url.trim();
+    let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("only http and https URLs are supported".to_string());
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err("URL has no host".to_string());
+    }
+    if let Some(dir) = &request.dir
+        && !dir.is_absolute()
+    {
+        return Err("the folder must be an absolute path".to_string());
+    }
+    let fixed_name = request
+        .file_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(util::sanitize_file_name);
+    Ok(Prepared {
+        url: url.to_string(),
+        parsed,
+        referer: clean_header(request.referer.clone(), "Referer")?,
+        cookies: clean_header(request.cookies.clone(), "cookies")?,
+        user_agent: clean_header(request.user_agent.clone(), "User-Agent")?,
+        fixed_name,
+    })
+}
+
+/// Same checks `add_request` does, for callers that queue a request before adding it.
+pub fn validate_request(request: &AddRequest) -> Result<(), String> {
+    prepare(request).map(|_| ())
 }
 
 /// Trims a header value; empty means absent. Errors (without echoing the value) when it

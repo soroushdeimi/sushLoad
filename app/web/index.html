@@ -138,6 +138,21 @@
           <div class="fctl"><button class="switch" id="sSort" role="switch" aria-checked="false"><i></i></button></div>
         </div>
         <div class="frow">
+          <div class="flabel"><div data-i18n="confirmSetting">Ask before starting a download</div>
+            <div class="muted small" data-i18n="confirmSettingHint">Shows “Download File Info” for new downloads: name, category and folder.</div></div>
+          <div class="fctl"><button class="switch" id="sConfirm" role="switch" aria-checked="true"><i></i></button></div>
+        </div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="notifySetting">Notify when a download finishes</div>
+            <div class="muted small" data-i18n="notifySettingHint">A macOS notification when a download completes or fails.</div></div>
+          <div class="fctl"><button class="switch" id="sNotify" role="switch" aria-checked="true"><i></i></button></div>
+        </div>
+        <div class="frow col">
+          <div class="flabel"><div data-i18n="catFolders">Remembered folders</div>
+            <div class="muted small" id="catDirsNone" data-i18n="catFoldersNone">None yet. Tick “Remember this folder” in the download dialog.</div></div>
+          <div class="catdirs" id="catDirs"></div>
+        </div>
+        <div class="frow">
           <div class="flabel"><div data-i18n="maxConcurrent">Concurrent downloads</div></div>
           <div class="fctl"><input class="field num" id="sConc" type="number" min="1" max="10"></div>
         </div>
@@ -211,6 +226,11 @@
             <div data-i18n="extStep2">2. Turn on Developer mode.</div>
             <div data-i18n="extStep3">3. Click “Load unpacked” and pick the folder shown above.</div>
           </div>
+        </div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="logs">Log</div>
+            <div class="muted small" data-i18n="logsHint">sushload.log, rotated at 1 MiB.</div></div>
+          <div class="fctl"><button class="btn" id="bLogs" data-i18n="openLogs">Open log folder</button></div>
         </div>
         <div class="frow">
           <div class="flabel"><div data-i18n="language">Language</div></div>

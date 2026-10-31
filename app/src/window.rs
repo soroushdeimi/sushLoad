@@ -18,10 +18,48 @@ use objc2_web_kit::{
     WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKWebView,
     WKWebViewConfiguration,
 };
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
+use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use sushload_core::Engine;
+
+thread_local! {
+    /// The delegate, reachable from main-queue callbacks (main thread only).
+    static DELEGATE: RefCell<Option<Retained<Delegate>>> = const { RefCell::new(None) };
+}
+
+unsafe extern "C" {
+    static _dispatch_main_q: c_void;
+    fn dispatch_async_f(
+        queue: *const c_void,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+}
+
+extern "C" fn attention_on_main(_context: *mut c_void) {
+    DELEGATE.with(|cell| {
+        if let Some(delegate) = cell.borrow().as_ref() {
+            delegate.show_window();
+            delegate.eval("window.sushloadPending && window.sushloadPending()");
+            log::info!(target: "app", "window brought to front for a download waiting for confirmation");
+        }
+    });
+}
+
+/// From any thread: shows the window and tells its page to look for downloads waiting for
+/// confirmation. One dispatch per arrival; nothing is polled.
+pub fn request_attention() {
+    // SAFETY: `_dispatch_main_q` is libdispatch's main queue; the callback ignores its context.
+    unsafe {
+        dispatch_async_f(
+            &raw const _dispatch_main_q,
+            std::ptr::null_mut(),
+            attention_on_main,
+        );
+    }
+}
 
 static ENGINE: OnceLock<Engine> = OnceLock::new();
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -71,6 +109,7 @@ define_class!(
             if let Some(e) = ENGINE.get() {
                 e.shutdown();
             }
+            log::info!(target: "app", "stop");
             if let Some(d) = DATA_DIR.get() {
                 let _ = std::fs::remove_file(d.join("instance.json"));
             }
@@ -368,5 +407,6 @@ pub fn run(engine: Engine, url: String) {
     let app = NSApplication::sharedApplication(mtm);
     let delegate = Delegate::new(mtm, url);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+    DELEGATE.with(|cell| *cell.borrow_mut() = Some(delegate.clone()));
     app.run();
 }

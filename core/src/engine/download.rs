@@ -7,7 +7,8 @@ use super::segments;
 use super::util;
 use super::{Command, Inner, lock};
 use crate::categories;
-use crate::model::{DownloadId, Status};
+use crate::model::{DownloadId, Event, Status};
+use crate::redact::{redact_text, redact_url};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use reqwest::header::{
@@ -79,15 +80,15 @@ async fn wait_cancel(cancel: &mut watch::Receiver<bool>) {
     let _ = cancel.changed().await;
 }
 
-struct Probe {
-    total: Option<u64>,
-    resumable: bool,
-    etag: Option<String>,
-    last_modified: Option<String>,
-    file_name: Option<String>,
+pub(crate) struct Probe {
+    pub total: Option<u64>,
+    pub resumable: bool,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub file_name: Option<String>,
 }
 
-enum ProbeError {
+pub(crate) enum ProbeError {
     Cancelled,
     Retry(String),
     Failed(String),
@@ -95,9 +96,11 @@ enum ProbeError {
 
 /// Task entry point: runs one download and records success/failure, then wakes the scheduler.
 pub(crate) async fn run(inner: Arc<Inner>, id: DownloadId, cancel: watch::Receiver<bool>) {
+    let started = Instant::now();
+    let start_received = current_received(&inner, id);
     let result = run_download(&inner, id, cancel).await;
     match result {
-        Ok(()) => {}
+        Ok(()) => completed(&inner, id, started, start_received),
         Err(DownloadError::Cancelled) => mark_paused(&inner, id),
         Err(DownloadError::Fallback) => {
             mark_failed(
@@ -111,21 +114,75 @@ pub(crate) async fn run(inner: Arc<Inner>, id: DownloadId, cancel: watch::Receiv
     let _ = inner.tx.send(Command::Finished(id));
 }
 
-fn mark_failed(inner: &Arc<Inner>, id: DownloadId, message: String) {
-    {
-        let mut state = lock(&inner.state);
-        if let Some(entry) = state.find_mut(id)
-            && matches!(
-                entry.record.status,
-                Status::Connecting | Status::Downloading
+/// Logs the finished download (size, duration, average speed) and emits `Event::Completed`.
+fn completed(inner: &Arc<Inner>, id: DownloadId, started: Instant, start_received: u64) {
+    let info = {
+        let state = lock(&inner.state);
+        state.find(id).map(|entry| {
+            (
+                entry.record.file_name.clone(),
+                entry.record.path.clone(),
+                entry.record.total.unwrap_or(entry.record.received),
             )
-        {
-            entry.record.status = Status::Failed;
-            entry.record.error = Some(message);
-            entry.speed = 0;
-            entry.eta_secs = None;
-            entry.connections = 0;
+        })
+    };
+    let Some((file_name, path, total)) = info else {
+        return;
+    };
+    let elapsed = started.elapsed();
+    let secs = elapsed.as_secs_f64().max(0.001);
+    let average = (total.saturating_sub(start_received) as f64 / secs) as u64;
+    log::info!(
+        target: "engine",
+        "completed id={} name={} size={} in {:.1}s avg {}/s",
+        id.0,
+        file_name,
+        util::human_bytes(total),
+        secs,
+        util::human_bytes(average)
+    );
+    inner.emit(Event::Completed {
+        id,
+        file_name,
+        path,
+        total,
+        elapsed,
+    });
+}
+
+fn mark_failed(inner: &Arc<Inner>, id: DownloadId, message: String) {
+    let failed = {
+        let mut state = lock(&inner.state);
+        match state.find_mut(id) {
+            Some(entry)
+                if matches!(
+                    entry.record.status,
+                    Status::Connecting | Status::Downloading
+                ) =>
+            {
+                entry.record.status = Status::Failed;
+                entry.record.error = Some(message.clone());
+                entry.speed = 0;
+                entry.eta_secs = None;
+                entry.connections = 0;
+                Some(entry.record.file_name.clone())
+            }
+            _ => None,
         }
+    };
+    if let Some(file_name) = failed {
+        log::warn!(
+            target: "engine",
+            "failed id={} name={}: {}",
+            id.0,
+            file_name,
+            redact_text(&message)
+        );
+        inner.emit(Event::Failed {
+            id,
+            file_name,
+            error: message,
+        });
     }
     inner.persist();
 }
@@ -149,6 +206,7 @@ async fn run_download(
         old_resumable,
         had_progress,
         name_fixed,
+        placement,
         context,
     ) = {
         let mut state = lock(&inner.state);
@@ -175,6 +233,11 @@ async fn run_download(
             record.resumable,
             had_progress,
             record.name_fixed,
+            Placement {
+                dir: record.dir.clone(),
+                overwrite: record.overwrite,
+                category: record.category_override,
+            },
             RequestContext::new(
                 &record.url,
                 record.referer.clone(),
@@ -193,7 +256,7 @@ async fn run_download(
         .net()
         .map_err(DownloadError::Failed)?
         .with_context(context);
-    let probe = probe_with_retry(&net, &url, &mut cancel).await?;
+    let probe = probe_with_retry(&net, id, &url, &mut cancel).await?;
     let settings = { lock(&inner.state).settings.clone() };
 
     let (path, file_name, category) = if had_progress {
@@ -202,7 +265,9 @@ async fn run_download(
             .and_then(|name| name.to_str())
             .map(|name| name.to_string())
             .unwrap_or(current_name);
-        let category = categories::classify(&name);
+        let category = placement
+            .category
+            .unwrap_or_else(|| categories::classify(&name));
         (current_path, name, category)
     } else {
         let name = if name_fixed {
@@ -214,32 +279,65 @@ async fn run_download(
                 .map(util::sanitize_file_name)
                 .unwrap_or(current_name)
         };
-        let dir = categories::destination_dir(&settings, &name);
+        let category = placement
+            .category
+            .unwrap_or_else(|| categories::classify(&name));
+        let dir = placement
+            .dir
+            .clone()
+            .unwrap_or_else(|| categories::dir_for(&settings, category));
         std::fs::create_dir_all(&dir)
             .map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
-        let path = categories::unique_path(&dir, &name);
-        let category = categories::classify(&name);
+        let path = if placement.overwrite {
+            dir.join(&name)
+        } else {
+            categories::unique_path(&dir, &name)
+        };
         (path, name, category)
     };
 
     let part = part_path(&path);
     let mut reset = !had_progress;
     if had_progress {
+        let mut reasons: Vec<&str> = Vec::new();
         if !part.exists() {
-            reset = true;
+            reasons.push("partial file is missing");
         }
         if !probe.resumable || old_resumable != probe.resumable {
-            reset = true;
+            reasons.push("server no longer supports resuming");
         }
         match (old_total, probe.total) {
-            (Some(old), Some(new)) if old != new => reset = true,
-            (Some(_), None) => reset = true,
+            (Some(old), Some(new)) if old != new => reasons.push("size changed"),
+            (Some(_), None) => reasons.push("size no longer reported"),
             _ => {}
         }
-        if differs(&old_etag, &probe.etag) || differs(&old_last_modified, &probe.last_modified) {
+        if differs(&old_etag, &probe.etag) {
+            reasons.push("ETag changed");
+        }
+        if differs(&old_last_modified, &probe.last_modified) {
+            reasons.push("Last-Modified changed");
+        }
+        if reasons.is_empty() {
+            log::info!(target: "engine", "resume id={} continues the partial file", id.0);
+        } else {
             reset = true;
+            log::info!(
+                target: "engine",
+                "resume id={} starts over: {}",
+                id.0,
+                reasons.join(", ")
+            );
         }
     }
+    log::info!(
+        target: "engine",
+        "start id={} name={} size={} resumable={} url={}",
+        id.0,
+        file_name,
+        probe.total.map_or_else(|| "unknown".to_string(), util::human_bytes),
+        probe.resumable,
+        redact_url(&url)
+    );
 
     {
         let mut state = lock(&inner.state);
@@ -290,6 +388,13 @@ async fn run_download(
     run_single(inner, id, &net, &url, &path, total, cancel).await
 }
 
+/// Where the confirmation dialog wanted the file.
+struct Placement {
+    dir: Option<PathBuf>,
+    overwrite: bool,
+    category: Option<crate::model::Category>,
+}
+
 fn differs(old: &Option<String>, new: &Option<String>) -> bool {
     match (old, new) {
         (Some(old), Some(new)) => old != new,
@@ -299,6 +404,7 @@ fn differs(old: &Option<String>, new: &Option<String>) -> bool {
 
 async fn probe_with_retry(
     net: &Net,
+    id: DownloadId,
     url: &str,
     cancel: &mut watch::Receiver<bool>,
 ) -> Result<Probe, DownloadError> {
@@ -311,15 +417,17 @@ async fn probe_with_retry(
             Err(ProbeError::Failed(message)) => return Err(DownloadError::Failed(message)),
             Err(ProbeError::Retry(message)) => {
                 if attempt >= MAX_ATTEMPTS {
+                    log::warn!(target: "engine", "id={} giving up on the probe after {attempt} attempts: {}", id.0, redact_text(&message));
                     return Err(DownloadError::Failed(message));
                 }
+                log::debug!(target: "engine", "id={} probe attempt {attempt} failed, retrying: {}", id.0, redact_text(&message));
                 backoff(attempt, cancel).await?;
             }
         }
     }
 }
 
-async fn probe_once(
+pub(crate) async fn probe_once(
     net: &Net,
     url: &str,
     cancel: &mut watch::Receiver<bool>,
@@ -539,6 +647,7 @@ async fn segment_worker(
         let mut attempts = 0u32;
         loop {
             if attempts >= MAX_ATTEMPTS {
+                log::warn!(target: "engine", "id={} giving up on bytes {next_start}-{end} after {MAX_ATTEMPTS} attempts", id.0);
                 return Err(WorkerError::Fatal(format!(
                     "giving up on bytes {next_start}-{end} after {MAX_ATTEMPTS} attempts"
                 )));
@@ -559,6 +668,7 @@ async fn segment_worker(
                 Ok(true) => break,
                 Ok(false) => {
                     attempts += 1;
+                    log::debug!(target: "engine", "id={} segment {index} ended early (attempt {attempts}), retrying", id.0);
                     if attempts >= MAX_ATTEMPTS {
                         return Err(WorkerError::Fatal(
                             "connection closed before the segment was complete".to_string(),
@@ -575,8 +685,10 @@ async fn segment_worker(
                 Err(WorkerError::Retry(message)) => {
                     attempts += 1;
                     if attempts >= MAX_ATTEMPTS {
+                        log::warn!(target: "engine", "id={} giving up on segment {index}: {}", id.0, redact_text(&message));
                         return Err(WorkerError::Fatal(message));
                     }
+                    log::debug!(target: "engine", "id={} segment {index} attempt {attempts} failed, retrying: {}", id.0, redact_text(&message));
                     sleep_backoff(attempts, &mut cancel).await?;
                 }
             }
@@ -640,6 +752,7 @@ async fn serve_segment(
     let status = response.status();
     if status == StatusCode::TOO_MANY_REQUESTS || status == StatusCode::SERVICE_UNAVAILABLE {
         lower_limit(worker_limit);
+        log::debug!(target: "engine", "id={} HTTP {}: lowering parallel connections to {}", id.0, status.as_u16(), worker_limit.load(Ordering::SeqCst));
         return Err(WorkerError::Retry(format!("HTTP {}", status.as_u16())));
     }
     if status == StatusCode::OK {
@@ -878,6 +991,7 @@ async fn single_worker(
     let mut attempts = 0u32;
     loop {
         if attempts >= MAX_ATTEMPTS {
+            log::warn!(target: "engine", "id={} giving up on the single-connection download", id.0);
             return Err(WorkerError::Fatal(
                 "giving up on the single-connection download".to_string(),
             ));
@@ -897,8 +1011,15 @@ async fn single_worker(
             Ok(()) => return Ok(()),
             Err(WorkerError::Cancelled) => return Err(WorkerError::Cancelled),
             Err(WorkerError::Fatal(message)) => return Err(WorkerError::Fatal(message)),
-            Err(WorkerError::Fallback) | Err(WorkerError::Retry(_)) => {
+            Err(WorkerError::Fallback) => {
                 attempts += 1;
+                log::debug!(target: "engine", "id={} single stream attempt {attempts}: restarting", id.0);
+                reset_single(&inner, id, &file).await?;
+                sleep_backoff(attempts, &mut cancel).await?;
+            }
+            Err(WorkerError::Retry(message)) => {
+                attempts += 1;
+                log::debug!(target: "engine", "id={} single stream attempt {attempts} failed, retrying: {}", id.0, redact_text(&message));
                 reset_single(&inner, id, &file).await?;
                 sleep_backoff(attempts, &mut cancel).await?;
             }
@@ -1201,6 +1322,7 @@ fn mark_paused(inner: &Arc<Inner>, id: DownloadId) {
         }
     };
     if changed {
+        log::info!(target: "engine", "paused id={}", id.0);
         inner.persist();
     }
 }

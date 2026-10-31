@@ -174,3 +174,30 @@ select.field { padding-inline-end: 6px; }
 .frow.sechead { padding-bottom: 6px; border-bottom: 0; }
 #pCustom { border-top: 0; }
 .steps > div { padding: 1px 0; }
+
+/* Download File Info */
+.sheet.wide { width: min(600px, calc(100vw - 32px)); }
+.fi-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.fi-count { color: var(--muted); font-size: 12px; }
+.fi-grid { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 9px 12px; align-items: center; }
+.fi-k { color: var(--muted); }
+.fi-url { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: text; -webkit-user-select: text; }
+.fi-dir { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.fi-dir .mono { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fi-size.err { color: var(--warn); }
+.fi-note { color: var(--warn); }
+.fi-opts { display: flex; gap: 16px; margin-top: 4px; }
+.chk { display: flex; align-items: center; gap: 8px; cursor: default; }
+.chk input { margin: 0; accent-color: var(--accent); }
+.fi-sub { grid-column: 1 / 3; }
+.fi-list { max-height: 210px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); }
+.fi-item { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-bottom: 1px solid var(--hair); }
+.fi-item:last-child { border-bottom: 0; }
+.fi-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: ltr; text-align: start; }
+.fi-item .cat { color: var(--muted); font-size: 11.5px; }
+.catdirs { display: flex; flex-direction: column; gap: 6px; align-items: stretch; min-width: 280px; }
+.catdir { display: flex; align-items: center; gap: 10px; }
+.catdir .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.frow.col { flex-direction: column; align-items: stretch; gap: 8px; }
+.catdirs { min-width: 0; }
+.catdir > span:first-child { width: 90px; flex: none; }

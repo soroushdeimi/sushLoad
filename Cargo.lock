@@ -992,6 +992,7 @@ version = "0.1.0"
 dependencies = [
  "block2",
  "libc",
+ "log",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -999,6 +1000,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sushload-core",
+ "tempfile",
  "tiny_http",
 ]
 
@@ -1007,6 +1009,7 @@ name = "sushload-core"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "log",
  "percent-encoding",
  "reqwest",
  "serde",

@@ -54,6 +54,19 @@ const I18N = {
     extStep1: '1. Open chrome://extensions (or brave://extensions, edge://extensions).',
     extStep2: '2. Turn on Developer mode.',
     extStep3: '3. Click “Load unpacked” and pick the folder Finder just showed.',
+    fileInfoTitle: 'Download File Info', ofN: '{i} of {n}', fileNameL: 'File name', categoryL: 'Category',
+    saveTo: 'Save to', change: 'Change…', rememberFor: 'Remember this folder for {cat}',
+    sizeL: 'Size', checking: 'Checking…', resumableYes: 'resumable', noResume: 'no resume', sizeUnknown: 'unknown size',
+    probeFailed: 'Couldn’t check the link: {e}. You can still start the download.',
+    existsMsg: 'A file with this name exists', renameAuto: 'Rename automatically', overwriteL: 'Overwrite',
+    dontAsk: 'Don’t ask again', startDownload: 'Start download', downloadLater: 'Download later',
+    startN: 'Start {n} downloads', batchTitle: '{n} files', categoryFolders: 'category folders',
+    startedN: 'Started {n}', laterN: 'Added {n} as paused',
+    confirmSetting: 'Ask before starting a download',
+    confirmSettingHint: 'Shows “Download File Info” for new downloads: name, category and folder.',
+    notifySetting: 'Notify when a download finishes', notifySettingHint: 'A macOS notification when a download completes or fails.',
+    catFolders: 'Remembered folders', catFoldersNone: 'None yet. Tick “Remember this folder” in the download dialog.',
+    reset: 'Reset', logs: 'Log', openLogs: 'Open log folder', logsHint: 'sushload.log, rotated at 1 MiB.',
   },
   fa: {
     all: 'همه', downloading: 'در حال دانلود', queued: 'در صف', completed: 'کامل‌شده', pausedFailed: 'متوقف / ناموفق',
@@ -87,6 +100,19 @@ const I18N = {
     extStep1: '۱. صفحهٔ chrome://extensions را باز کنید (یا brave://extensions، edge://extensions).',
     extStep2: '۲. حالت Developer mode را روشن کنید.',
     extStep3: '۳. روی «Load unpacked» بزنید و همان پوشه‌ای را که Finder نشان داد انتخاب کنید.',
+    fileInfoTitle: 'اطلاعات فایل دانلود', ofN: '{i} از {n}', fileNameL: 'نام فایل', categoryL: 'دسته',
+    saveTo: 'ذخیره در', change: 'تغییر…', rememberFor: 'این پوشه را برای «{cat}» به خاطر بسپار',
+    sizeL: 'حجم', checking: 'در حال بررسی…', resumableYes: 'قابل ادامه', noResume: 'بدون قابلیت ادامه', sizeUnknown: 'حجم نامشخص',
+    probeFailed: 'بررسی لینک ممکن نشد: {e}. همچنان می‌توانید دانلود را شروع کنید.',
+    existsMsg: 'فایلی با این نام وجود دارد', renameAuto: 'تغییر نام خودکار', overwriteL: 'جایگزینی',
+    dontAsk: 'دیگر نپرس', startDownload: 'شروع دانلود', downloadLater: 'بعداً دانلود کن',
+    startN: 'شروع {n} دانلود', batchTitle: '{n} فایل', categoryFolders: 'پوشه‌های دسته‌بندی',
+    startedN: '{n} دانلود شروع شد', laterN: '{n} مورد متوقف اضافه شد',
+    confirmSetting: 'پرسش پیش از شروع دانلود',
+    confirmSettingHint: 'برای دانلودهای تازه پنجرهٔ «اطلاعات فایل دانلود» با نام، دسته و پوشه نشان داده می‌شود.',
+    notifySetting: 'اعلان پایان دانلود', notifySettingHint: 'هنگام کامل شدن یا ناموفق ماندن دانلود، یک اعلان macOS نشان داده می‌شود.',
+    catFolders: 'پوشه‌های ذخیره‌شده', catFoldersNone: 'هنوز چیزی نیست. در پنجرهٔ دانلود «این پوشه را به خاطر بسپار» را بزنید.',
+    reset: 'بازنشانی', logs: 'گزارش', openLogs: 'باز کردن پوشهٔ گزارش', logsHint: 'sushload.log، با چرخش در ۱ مگابایت.',
   },
 };
 let lang = lstore.get('sushload_lang') === 'fa' ? 'fa' : 'en';
@@ -136,7 +162,7 @@ async function api(path, body) {
 }
 
 /* ---------- state ---------- */
-let state = { active: false, downloads: [], settings: null };
+let state = { active: false, downloads: [], settings: null, pending: [], default_dirs: {} };
 let byId = new Map();
 let view = 'all';
 let search = '';
@@ -178,6 +204,7 @@ async function refresh() {
     state = s;
     byId = new Map(s.downloads.map(d => [d.id, d]));
     render();
+    maybeShowPending();
   } catch (e) {
     if (!offline) toast(t('offline'));
     offline = true;
@@ -544,17 +571,24 @@ document.addEventListener('scroll', hideMenu, true);
 
 /* ---------- sheets ---------- */
 const overlay = $('#overlay'), sheet = $('#sheet');
-let sheetClose = null;
-function openSheet(build) {
+let sheetClose = null, sheetModal = false;
+function openSheet(build, modal) {
   return new Promise(resolve => {
     sheet.innerHTML = '';
-    const close = v => { overlay.hidden = true; sheet.innerHTML = ''; sheetClose = null; resolve(v); };
+    sheet.className = 'sheet' + (modal ? ' wide' : '');
+    sheet.onkeydown = null;
+    sheetModal = !!modal;
+    const close = v => {
+      overlay.hidden = true; sheet.innerHTML = ''; sheetClose = null; sheetModal = false; resolve(v);
+      setTimeout(maybeShowPending, 0);
+    };
     sheetClose = close;
     build(sheet, close);
     overlay.hidden = false;
   });
 }
-overlay.addEventListener('mousedown', e => { if (e.target === overlay && sheetClose) sheetClose(null); });
+// A click outside dismisses a plain sheet; the download dialog only closes with its buttons or Esc.
+overlay.addEventListener('mousedown', e => { if (e.target === overlay && sheetClose && !sheetModal) sheetClose(null); });
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -600,7 +634,7 @@ async function addDialog(prefill) {
       add.disabled = true;
       try {
         const r = await api('/api/add', { urls: text });
-        refresh();
+        await refresh();
         if (r.errors.length) {
           const bad = text.split('\n').map(x => x.trim()).filter(x => x && r.errors.some(e => e.startsWith(x + ': ')));
           ta.value = bad.join('\n');
@@ -631,10 +665,205 @@ async function quickAdd(text) {
   if (!urls.length) return;
   try {
     const r = await api('/api/add', { urls: urls.join('\n') });
+    if (r.queued) { await refresh(); return; }
     toast(r.errors.length ? r.errors[0] : t('addedN', { n: r.added }));
     refresh();
   } catch (e) { toast(e.message); }
 }
+
+/* ---------- download confirmation ("Download File Info") ---------- */
+const EXT_CAT = {};
+for (const [cat, list] of Object.entries({
+  video: 'mp4 mkv avi mov webm m4v flv wmv ts 3gp', music: 'mp3 m4a aac flac wav ogg opus wma',
+  documents: 'pdf doc docx xls xlsx ppt pptx txt rtf epub odt csv md', archives: 'zip rar 7z tar gz tgz bz2 xz zst iso',
+  programs: 'dmg pkg app exe msi deb rpm apk ipa', images: 'jpg jpeg png gif webp heic svg bmp tiff',
+})) for (const e of list.split(' ')) EXT_CAT[e] = cat;
+const CATS = ['video', 'music', 'documents', 'archives', 'programs', 'images', 'other'];
+const catOfName = n => EXT_CAT[(/\.([A-Za-z0-9]+)$/.exec(n) || [])[1]?.toLowerCase()] || 'other';
+function nameOfUrl(u) {
+  try { return decodeURIComponent(new URL(u).pathname.split('/').filter(Boolean).pop() || '') || 'download'; }
+  catch { return 'download'; }
+}
+const midTrunc = (s, n) => s.length <= n ? s : s.slice(0, Math.ceil(n * 0.6)) + '…' + s.slice(s.length - Math.floor(n * 0.4) + 1);
+const defaultDir = cat => (state.default_dirs && state.default_dirs[cat]) || (state.settings ? state.settings.download_dir : '');
+
+let pendingBusy = false, pendingDone = 0;
+async function maybeShowPending() {
+  if (pendingBusy || sheetClose || !state.pending || !state.pending.length) return;
+  pendingBusy = true;
+  try {
+    while (state.pending.length && !sheetClose) {
+      const p = state.pending[0];
+      const n = pendingDone + state.pending.length;
+      const res = await confirmDialog(p, pendingDone + 1, n);
+      if (res === null) { try { await api('/api/discard', { pending_id: p.id }); } catch { /* already gone */ } }
+      pendingDone++;
+      state.pending = state.pending.filter(x => x.id !== p.id);
+      await refresh();
+      if (!state.pending.length) pendingDone = 0;
+    }
+  } finally { pendingBusy = false; }
+}
+
+function confirmDialog(p, pos, total) {
+  return openSheet((s, close) => {
+    const batch = p.batch;
+    const head = el('div', 'fi-head');
+    head.append(el('h2', null, batch ? t('fileInfoTitle') + ' · ' + t('batchTitle', { n: p.items.length }) : t('fileInfoTitle')));
+    if (total > 1) head.append(el('span', 'fi-count', t('ofN', { i: pos, n: total })));
+    s.appendChild(head);
+
+    const grid = el('div', 'fi-grid');
+    const row = (label, node) => { grid.append(el('div', 'fi-k', label), node); };
+    const err = el('div', 'errs'); err.hidden = true;
+    let dir = '', dirChosen = false, catChosen = false, nameInput = null, catSel = null;
+    const dirText = el('div', 'mono');
+    const rememberChk = el('input'); rememberChk.type = 'checkbox';
+    const rememberText = el('span');
+    const existsBox = el('div', 'fi-sub'); existsBox.hidden = true;
+    let overwrite = false;
+    const checks = [];
+
+    const paintDir = () => {
+      const shown = dir || (batch && state.settings ? state.settings.download_dir : '');
+      dirText.textContent = midTrunc(shown, 60) + (batch && !dir && state.settings && state.settings.sort_into_categories ? '  (' + t('categoryFolders') + ')' : '');
+      dirText.title = shown;
+      rememberText.textContent = t('rememberFor', { cat: t(catSel ? catSel.value : 'other') });
+    };
+    const recheck = async () => {
+      if (batch || !nameInput) return;
+      const name = nameInput.value.trim();
+      if (!name || !dir) { existsBox.hidden = true; return; }
+      try {
+        const r = await api('/api/exists', { dir, file_name: name });
+        paintExists(r.exists);
+      } catch { /* ignore */ }
+    };
+    const paintExists = exists => {
+      existsBox.hidden = !exists;
+      existsBox.innerHTML = '';
+      if (!exists) { overwrite = false; return; }
+      existsBox.append(el('div', 'fi-note', t('existsMsg')));
+      const mk = (val, label) => {
+        const l = el('label', 'chk');
+        const r = el('input'); r.type = 'radio'; r.name = 'fi-ow'; r.checked = overwrite === val;
+        r.onchange = () => { overwrite = val; };
+        l.append(r, el('span', null, label)); return l;
+      };
+      existsBox.append(mk(false, t('renameAuto')), mk(true, t('overwriteL')));
+    };
+
+    // URL (read-only, middle-truncated, full text on hover)
+    if (!batch) {
+      const u = el('div', 'fi-url mono', midTrunc(p.items[0].url, 70)); u.title = p.items[0].url;
+      row(t('url'), u);
+      nameInput = el('input', 'field'); nameInput.spellcheck = false; nameInput.dir = 'ltr';
+      nameInput.value = p.items[0].file_name || nameOfUrl(p.items[0].url);
+      row(t('fileNameL'), nameInput);
+      catSel = el('select', 'field');
+      for (const c of CATS) { const o = el('option', null, t(c)); o.value = c; catSel.append(o); }
+      catSel.value = catOfName(nameInput.value);
+      row(t('categoryL'), catSel);
+      dir = defaultDir(catSel.value);
+    } else {
+      const list = el('div', 'fi-list fi-sub');
+      p.items.forEach(it => {
+        const l = el('label', 'fi-item');
+        const cb = el('input'); cb.type = 'checkbox'; cb.checked = true; cb.onchange = paintButtons;
+        const name = it.file_name || nameOfUrl(it.url);
+        const nm = el('span', 'nm', name); nm.title = it.url;
+        l.append(cb, nm, el('span', 'cat', t(catOfName(name))));
+        checks.push({ cb, it, name }); list.append(l);
+      });
+      grid.append(list);
+    }
+
+    const chg = el('button', 'btn', t('change'));
+    chg.onclick = async () => {
+      try { const r = await api('/api/choose_dir', {}); if (r && r.path) { dir = r.path; dirChosen = true; paintDir(); recheck(); } }
+      catch (e) { toast(e.message); }
+    };
+    const dirRow = el('div', 'fi-dir'); dirRow.append(dirText, chg);
+    row(t('saveTo'), dirRow);
+    if (!batch) {
+      const rem = el('label', 'chk fi-sub'); rem.append(rememberChk, rememberText); grid.append(rem);
+    }
+    const sizeEl = el('div', 'fi-size muted', batch ? '' : t('checking'));
+    if (!batch) row(t('sizeL'), sizeEl);
+    grid.append(existsBox);
+    s.appendChild(grid);
+    s.appendChild(err);
+
+    const askBox = el('label', 'chk'); const ask = el('input'); ask.type = 'checkbox';
+    askBox.append(ask, el('span', null, t('dontAsk')));
+    s.appendChild(askBox);
+
+    const btns = el('div', 'btns');
+    const cancel = el('button', 'btn', t('cancel')); cancel.onclick = () => close(null);
+    const later = el('button', 'btn', t('downloadLater'));
+    const start = el('button', 'btn primary', t('startDownload'));
+    btns.append(cancel, later, start); s.appendChild(btns);
+
+    function paintButtons() {
+      if (!batch) return;
+      const n = checks.filter(c => c.cb.checked).length;
+      start.textContent = t('startN', { n }); start.disabled = later.disabled = n === 0;
+    }
+
+    const submit = async mode => {
+      start.disabled = later.disabled = cancel.disabled = true;
+      err.hidden = true;
+      const items = batch
+        ? checks.filter(c => c.cb.checked).map(c => ({ index: c.it.index, category: catOfName(c.name), file_name: c.it.file_name || undefined }))
+        : [{ index: 0, file_name: nameInput.value.trim(), category: catSel.value, dir, overwrite }];
+      try {
+        const r = await api('/api/confirm', {
+          pending_id: p.id, items, start_paused: mode === 'later', dont_ask: ask.checked,
+          remember_dir: !batch && rememberChk.checked, dir: batch && dirChosen ? dir : undefined,
+        });
+        if (r.errors && r.errors.length) toast(r.errors[0]);
+        else toast(t(mode === 'later' ? 'laterN' : 'startedN', { n: r.added }));
+        close(mode);
+      } catch (e) {
+        err.textContent = e.message; err.hidden = false;
+        start.disabled = later.disabled = cancel.disabled = false; paintButtons();
+      }
+    };
+    start.onclick = () => submit('start');
+    later.onclick = () => submit('later');
+    s.onkeydown = e => {
+      if (e.key === 'Enter' && !e.isComposing && e.target.tagName !== 'BUTTON' && !start.disabled) { e.preventDefault(); submit('start'); }
+    };
+
+    if (!batch) {
+      catSel.onchange = () => { catChosen = true; if (!dirChosen) dir = defaultDir(catSel.value); paintDir(); recheck(); };
+      nameInput.onchange = () => {
+        if (!catChosen) catSel.value = catOfName(nameInput.value);
+        if (!dirChosen) dir = defaultDir(catSel.value);
+        paintDir(); recheck();
+      };
+      // One quick look at the link: size, resumability, name from the server, existing file.
+      (async () => {
+        try {
+          const r = await api('/api/probe', { pending_id: p.id, index: 0 });
+          if (!p.items[0].file_name && document.activeElement !== nameInput) nameInput.value = r.file_name;
+          if (!catChosen) catSel.value = r.category;
+          if (!dirChosen) dir = r.dir;
+          sizeEl.textContent = (r.total != null ? fmtBytes(r.total) : t('sizeUnknown')) + ' · ' + (r.resumable ? t('resumableYes') : t('noResume'));
+          sizeEl.classList.remove('muted');
+          paintDir(); recheck();
+        } catch (e) {
+          sizeEl.textContent = t('probeFailed', { e: e.message });
+          sizeEl.classList.add('err');
+        }
+      })();
+    }
+    paintDir(); paintButtons(); recheck();
+    (nameInput || start).focus();
+    if (nameInput) nameInput.select();
+  }, true);
+}
+window.sushloadPending = () => refresh();
 
 /* ---------- drop / paste / keyboard ---------- */
 let dragDepth = 0;
@@ -701,6 +930,7 @@ function buildProxy() {
 
 /* ---------- settings page ---------- */
 const S = {
+  confirm: $('#sConfirm'), notify: $('#sNotify'),
   dir: $('#sDir'), sort: $('#sSort'), conc: $('#sConc'), conns: $('#sConns'),
   mode: $('#sLimitMode'), val: $('#sLimitVal'), unit: $('#sLimitUnit'), lang: $('#sLang'),
 };
@@ -711,6 +941,9 @@ function fillSettings(force) {
   if (!force && $('#page-settings').contains(document.activeElement) && isEditable(document.activeElement)) return;
   S.dir.value = s.download_dir;
   S.sort.setAttribute('aria-checked', String(!!s.sort_into_categories));
+  S.confirm.setAttribute('aria-checked', String(s.confirm_new_downloads !== false));
+  S.notify.setAttribute('aria-checked', String(s.notify_on_complete !== false));
+  paintCatDirs(s.category_dirs || {});
   S.conc.value = s.max_concurrent;
   S.conns.value = s.connections;
   if (s.speed_limit > 0) {
@@ -730,9 +963,26 @@ function fillSettings(force) {
     $('#pUser').value = pp.user; $('#pPass').value = pp.pass;
   }
 }
+function paintCatDirs(map) {
+  const box = $('#catDirs');
+  const keys = CATS.filter(c => map[c]);
+  const sig = keys.map(c => c + '=' + map[c]).join('|') + lang;
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  box.innerHTML = '';
+  $('#catDirsNone').hidden = keys.length > 0;
+  for (const c of keys) {
+    const r = el('div', 'catdir');
+    const path = el('span', 'mono', map[c]); path.title = map[c];
+    const b = el('button', 'btn', t('reset'));
+    b.onclick = () => { const next = Object.assign({}, state.settings.category_dirs); delete next[c]; saveSettings(next); };
+    r.append(el('span', null, t(c)), path, b);
+    box.append(r);
+  }
+}
 function renderSettingsIfIdle() { if (view === 'settings') fillSettings(false); }
 
-async function saveSettings() {
+async function saveSettings(categoryDirs) {
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(Number(v)) || lo));
   const limited = S.mode.value === 'custom';
   const v = Math.max(0.01, Number(S.val.value) || 1);
@@ -744,6 +994,10 @@ async function saveSettings() {
     speed_limit: limited ? Math.round(v * (S.unit.value === 'MB' ? 1048576 : 1024)) : 0,
     proxy_mode: $('#pMode').value,
     proxy_url: $('#pMode').value === 'custom' ? buildProxy() : (state.settings && state.settings.proxy_url) || '',
+    confirm_new_downloads: S.confirm.getAttribute('aria-checked') === 'true',
+    notify_on_complete: S.notify.getAttribute('aria-checked') === 'true',
+    category_dirs: (categoryDirs && typeof categoryDirs === 'object' && !(categoryDirs instanceof Event))
+      ? categoryDirs : ((state.settings && state.settings.category_dirs) || {}),
   };
   const msg = $('#sMsg');
   const pmsg = $('#pMsg');
@@ -769,6 +1023,15 @@ S.dir.addEventListener('keydown', e => { if (e.key === 'Enter') S.dir.blur(); })
 S.sort.addEventListener('click', () => {
   S.sort.setAttribute('aria-checked', String(S.sort.getAttribute('aria-checked') !== 'true'));
   saveSettings();
+});
+for (const sw of [S.confirm, S.notify]) {
+  sw.addEventListener('click', () => {
+    sw.setAttribute('aria-checked', String(sw.getAttribute('aria-checked') !== 'true'));
+    saveSettings();
+  });
+}
+$('#bLogs').addEventListener('click', async () => {
+  try { await api('/api/open_logs', {}); } catch (e) { toast(e.message); }
 });
 $('#sChoose').addEventListener('click', async () => {
   try {

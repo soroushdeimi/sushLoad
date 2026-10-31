@@ -28,13 +28,31 @@ pub fn classify(file_name: &str) -> Category {
     }
 }
 
-/// Folder a file with this name is saved to under the given settings.
-pub fn destination_dir(settings: &Settings, file_name: &str) -> PathBuf {
+/// Default folder for a category: the user's per-category folder if set, else the category
+/// sub-folder of `download_dir` (when sorting), else `download_dir`.
+pub fn dir_for(settings: &Settings, category: Category) -> PathBuf {
+    if let Some(dir) = settings
+        .category_dirs
+        .get(&category)
+        .filter(|dir| !dir.as_os_str().is_empty())
+    {
+        return dir.clone();
+    }
     if settings.sort_into_categories {
-        settings.download_dir.join(classify(file_name).label())
+        settings.download_dir.join(category.label())
     } else {
         settings.download_dir.clone()
     }
+}
+
+/// Folder a file with this name is saved to under the given settings.
+pub fn destination_dir(settings: &Settings, file_name: &str) -> PathBuf {
+    dir_for(settings, classify(file_name))
+}
+
+/// True when `dir/name` (or its `.part`) is already there, i.e. `unique_path` would rename.
+pub fn name_taken(dir: &Path, name: &str) -> bool {
+    is_taken(dir, name)
 }
 
 /// `dir/name`, or `dir/name (1).ext`, `(2)`… if that path already exists (or is reserved by a `.part`).
@@ -115,6 +133,36 @@ mod tests {
         settings.sort_into_categories = false;
         assert_eq!(
             destination_dir(&settings, "clip.mov"),
+            PathBuf::from("/tmp/Downloads")
+        );
+    }
+
+    #[test]
+    fn category_dirs_override_the_default_folder() {
+        let mut settings = Settings {
+            download_dir: PathBuf::from("/tmp/Downloads"),
+            sort_into_categories: true,
+            ..Settings::default()
+        };
+        settings
+            .category_dirs
+            .insert(Category::Video, PathBuf::from("/Volumes/Media/Movies"));
+        assert_eq!(
+            destination_dir(&settings, "clip.mov"),
+            PathBuf::from("/Volumes/Media/Movies")
+        );
+        assert_eq!(
+            destination_dir(&settings, "a.zip"),
+            PathBuf::from("/tmp/Downloads/Archives")
+        );
+        // The override also wins when category folders are off.
+        settings.sort_into_categories = false;
+        assert_eq!(
+            destination_dir(&settings, "clip.mov"),
+            PathBuf::from("/Volumes/Media/Movies")
+        );
+        assert_eq!(
+            destination_dir(&settings, "a.zip"),
             PathBuf::from("/tmp/Downloads")
         );
     }

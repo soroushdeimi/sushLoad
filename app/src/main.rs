@@ -1,6 +1,7 @@
 //! sushLoad: a light download manager. `sushload` opens a native window; `sushload --web` serves the
 //! same UI to a browser instead.
 
+mod logger;
 mod nativehost;
 mod server;
 mod window;
@@ -11,7 +12,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
-use sushload_core::Engine;
+use sushload_core::{Engine, Event};
 
 const DEFAULT_PORT: u16 = 47815;
 const BUNDLE_ID: &str = "com.soroushdeimi.sushload";
@@ -127,6 +128,7 @@ fn main() {
         } else {
             Some(first)
         };
+        logger::init(false);
         std::process::exit(nativehost::run(origin.map(String::as_str)));
     }
     let args = match parse_args() {
@@ -136,6 +138,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+    logger::init(true);
     let dir = data_dir();
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("sushload: cannot create {}: {e}", dir.display());
@@ -167,13 +170,28 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let srv = match server::start(engine.clone(), args.port) {
+    install_notifications(&engine);
+    let attention = if args.web {
+        server::Attention::Browser {
+            open: !args.no_open,
+        }
+    } else {
+        server::Attention::Window
+    };
+    let srv = match server::start(engine.clone(), args.port, attention) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("sushload: {e}");
             std::process::exit(1);
         }
     };
+    log::info!(
+        target: "app",
+        "start v{} mode={} port={}",
+        env!("CARGO_PKG_VERSION"),
+        if args.web { "web" } else { "app" },
+        srv.port
+    );
     write_instance(&dir, srv.port, &srv.token);
     let url = format!("http://127.0.0.1:{}/?t={}", srv.port, srv.token);
 
@@ -189,4 +207,55 @@ fn main() {
 
     engine.shutdown();
     let _ = std::fs::remove_file(dir.join("instance.json"));
+    log::info!(target: "app", "stop");
+}
+
+/// macOS notification when a download finishes or fails, driven by the engine's events (no
+/// timers). The text goes to `osascript` as an argument, never into the script source.
+/// `SUSHLOAD_NO_NOTIFY=1` skips the banner (tests, CI).
+fn install_notifications(engine: &Engine) {
+    let reader = engine.clone();
+    engine.set_event_handler(move |event| {
+        if !reader.settings().notify_on_complete {
+            return;
+        }
+        let message = match event {
+            Event::Completed { file_name, .. } => format!("Download complete \u{2014} {file_name}"),
+            Event::Failed {
+                file_name, error, ..
+            } => format!(
+                "Download failed \u{2014} {file_name}: {}",
+                sushload_core::redact::redact_text(error)
+            ),
+        };
+        if std::env::var_os("SUSHLOAD_NO_NOTIFY").is_some() {
+            log::info!(target: "notify", "suppressed: {message}");
+            return;
+        }
+        log::debug!(target: "notify", "{message}");
+        let child = Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "display notification (item 1 of argv) with title (item 2 of argv)",
+                "-e",
+                "end run",
+                &message,
+                "sushLoad",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match child {
+            // Reap it so no zombie is left behind.
+            Ok(mut child) => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(e) => log::warn!(target: "notify", "cannot run osascript: {e}"),
+        }
+    });
 }

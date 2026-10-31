@@ -5,9 +5,10 @@ use serde_json::{Value, json};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use sushload_core::{
-    AddRequest, DownloadId, DownloadView, Engine, ProxyMode, Settings, Status, validate_proxy_url,
+    AddRequest, Category, DownloadId, DownloadView, Engine, ProbeInfo, ProxyMode, Settings, Status,
+    categories, sanitize_file_name, validate_proxy_url, validate_request,
 };
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -16,10 +17,11 @@ const APP_JS: &str = include_str!("../web/app.js");
 
 const MAX_BODY: usize = 1024 * 1024;
 const MAX_ITEMS: usize = 500;
+/// Hand-overs waiting for an answer in the confirmation dialog.
+const MAX_PENDING: usize = 100;
 
 /// What the HTTP layer needs from the engine and the OS. `Engine` implements it; tests use a mock.
 pub trait Backend: Send + Sync + 'static {
-    fn add(&self, url: &str) -> Result<u64, String>;
     /// A download handed over by the browser extension (file name, Referer, cookies, UA).
     fn add_request(&self, req: AddRequest) -> Result<u64, String>;
     fn pause(&self, id: u64);
@@ -35,12 +37,13 @@ pub trait Backend: Send + Sync + 'static {
     fn choose_dir(&self) -> Option<String>;
     /// Shows the bundled browser extension folder in Finder.
     fn reveal_extension(&self) -> Result<(), String>;
+    /// Quick `Range: bytes=0-0` look at a URL for the confirmation dialog.
+    fn probe(&self, req: &AddRequest) -> Result<ProbeInfo, String>;
+    /// Shows the log folder in Finder.
+    fn open_logs(&self) -> Result<(), String>;
 }
 
 impl Backend for Engine {
-    fn add(&self, url: &str) -> Result<u64, String> {
-        Engine::add(self, url).map(|id| id.0)
-    }
     fn add_request(&self, req: AddRequest) -> Result<u64, String> {
         Engine::add_request(self, req).map(|id| id.0)
     }
@@ -97,6 +100,20 @@ impl Backend for Engine {
             s
         })
     }
+    fn probe(&self, req: &AddRequest) -> Result<ProbeInfo, String> {
+        Engine::probe(self, req)
+    }
+    fn open_logs(&self) -> Result<(), String> {
+        let dir = crate::logger::log_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        Command::new("open")
+            .arg(&dir)
+            .spawn()
+            .map(|mut c| {
+                let _ = c.wait();
+            })
+            .map_err(|e| e.to_string())
+    }
     fn reveal_extension(&self) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let dir = crate::nativehost::extension_dir(&exe)
@@ -112,10 +129,49 @@ impl Backend for Engine {
     }
 }
 
+/// Called when a hand-over from the browser lands in the confirmation list; the argument is
+/// true when the list was empty before (nobody is looking at a dialog yet).
+pub type Notify = Box<dyn Fn(bool) + Send + Sync>;
+
+/// A hand-over waiting for the user's answer. Held in memory only (cookies included), so a
+/// quit forgets it. More than one item means a "Download all links" batch.
+struct Pending {
+    id: u64,
+    items: Vec<AddRequest>,
+}
+
 pub struct Ctx<B: Backend> {
     pub backend: B,
     pub token: String,
     pub port: u16,
+    pending: Mutex<Vec<Pending>>,
+    next_pending: Mutex<u64>,
+    notify: Notify,
+}
+
+impl<B: Backend> Ctx<B> {
+    pub fn new(backend: B, token: String, port: u16, notify: Notify) -> Self {
+        Ctx {
+            backend,
+            token,
+            port,
+            pending: Mutex::new(Vec::new()),
+            next_pending: Mutex::new(1),
+            notify,
+        }
+    }
+
+    fn pending(&self) -> std::sync::MutexGuard<'_, Vec<Pending>> {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// What to do when something is waiting for the user.
+pub enum Attention {
+    /// Bring the native window to the front and let its page open the dialog.
+    Window,
+    /// Open the web UI in the browser (unless `--no-open`).
+    Browser { open: bool },
 }
 
 pub struct Response {
@@ -195,11 +251,56 @@ fn settings_json(s: &Settings) -> Value {
             ProxyMode::Custom => "custom",
         },
         "proxy_url": s.proxy_url,
+        "confirm_new_downloads": s.confirm_new_downloads,
+        "notify_on_complete": s.notify_on_complete,
+        "category_dirs": s.category_dirs.iter()
+            .map(|(c, d)| (c.label().to_lowercase(), json!(d.to_string_lossy())))
+            .collect::<serde_json::Map<String, Value>>(),
     })
 }
 
-/// Parses and validates a settings object from the UI.
-pub fn parse_settings(v: &Value) -> Result<Settings, String> {
+/// Folder each category would use right now (for the dialog's "Save to").
+fn default_dirs_json(s: &Settings) -> Value {
+    Category::ALL
+        .iter()
+        .map(|c| {
+            (
+                c.label().to_lowercase(),
+                json!(categories::dir_for(s, *c).to_string_lossy()),
+            )
+        })
+        .collect::<serde_json::Map<String, Value>>()
+        .into()
+}
+
+fn category_from(label: &str) -> Option<Category> {
+    Category::ALL
+        .into_iter()
+        .find(|c| c.label().eq_ignore_ascii_case(label))
+}
+
+fn pending_json(list: &[Pending]) -> Value {
+    list.iter()
+        .map(|p| {
+            json!({
+                "id": p.id,
+                "batch": p.items.len() > 1,
+                // No cookies here: they stay in memory on this side.
+                "items": p.items.iter().enumerate().map(|(i, r)| json!({
+                    "index": i,
+                    "url": r.url,
+                    "file_name": r.file_name,
+                    "referer": r.referer,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
+/// Parses and validates a settings object from the UI. Newer optional fields keep their value
+/// from `base` when the object leaves them out.
+pub fn parse_settings(v: &Value, base: &Settings) -> Result<Settings, String> {
     let dir = v
         .get("download_dir")
         .and_then(Value::as_str)
@@ -251,6 +352,27 @@ pub fn parse_settings(v: &Value) -> Result<Settings, String> {
     if proxy_mode == ProxyMode::Custom {
         validate_proxy_url(&proxy_url)?;
     }
+    let flag = |key: &str, fallback: bool| v.get(key).and_then(Value::as_bool).unwrap_or(fallback);
+    let category_dirs = match v.get("category_dirs") {
+        None | Some(Value::Null) => base.category_dirs.clone(),
+        Some(Value::Object(map)) => {
+            let mut out = std::collections::HashMap::new();
+            for (key, value) in map {
+                let category =
+                    category_from(key).ok_or_else(|| format!("unknown category \"{key}\""))?;
+                let path = value.as_str().unwrap_or("").trim();
+                if path.is_empty() {
+                    continue;
+                }
+                if !Path::new(path).is_absolute() {
+                    return Err(format!("the folder for {key} must be an absolute path"));
+                }
+                out.insert(category, PathBuf::from(path));
+            }
+            out
+        }
+        Some(_) => return Err("category_dirs must be an object".into()),
+    };
     Ok(Settings {
         download_dir: dir,
         sort_into_categories: sort,
@@ -259,6 +381,9 @@ pub fn parse_settings(v: &Value) -> Result<Settings, String> {
         speed_limit: limit,
         proxy_mode,
         proxy_url,
+        confirm_new_downloads: flag("confirm_new_downloads", base.confirm_new_downloads),
+        category_dirs,
+        notify_on_complete: flag("notify_on_complete", base.notify_on_complete),
     })
 }
 
@@ -292,6 +417,12 @@ pub fn handle<B: Backend>(
             "/" | "/index.html" => static_resp("text/html; charset=utf-8", INDEX_HTML),
             "/style.css" => static_resp("text/css; charset=utf-8", STYLE_CSS),
             "/app.js" => static_resp("text/javascript; charset=utf-8", APP_JS),
+            // Browsers ask for it on every page load; answer quietly instead of logging a 404.
+            "/favicon.ico" => Response {
+                status: 204,
+                content_type: "image/x-icon",
+                body: Vec::new(),
+            },
             _ => err(404, "not found"),
         };
     }
@@ -317,21 +448,25 @@ pub fn handle<B: Backend>(
                 "active": b.has_active(),
                 "downloads": b.snapshot().iter().map(view_json).collect::<Vec<_>>(),
                 "settings": settings_json(&b.settings()),
+                "default_dirs": default_dirs_json(&b.settings()),
+                "pending": pending_json(&ctx.pending()),
             }),
         ),
         ("POST", "/api/add") => {
             let Some(text) = parsed.get("urls").and_then(Value::as_str) else {
                 return err(400, "urls missing");
             };
-            let mut added = 0u32;
-            let mut errors = Vec::new();
-            for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-                match b.add(line) {
-                    Ok(_) => added += 1,
-                    Err(e) => errors.push(format!("{line}: {e}")),
-                }
-            }
-            json_resp(200, json!({ "added": added, "errors": errors }))
+            let items = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(|url| AddRequest {
+                    url: url.to_string(),
+                    ..AddRequest::default()
+                })
+                .collect();
+            // The page that typed the URLs opens the dialog itself: no attention needed.
+            add_or_queue(ctx, items, false)
         }
         ("POST", "/api/add_request") => {
             let Some(items) = parsed.get("items").and_then(Value::as_array) else {
@@ -340,23 +475,88 @@ pub fn handle<B: Backend>(
             if items.len() > MAX_ITEMS {
                 return err(400, "too many items");
             }
-            let mut added = 0u32;
-            let mut errors = Vec::new();
+            let mut requests = Vec::new();
+            let mut bad = 0;
             for item in items {
-                // Errors name the URL only; cookies never leave the request.
                 match serde_json::from_value::<AddRequest>(item.clone()) {
-                    Ok(req) => {
-                        let url = req.url.clone();
-                        match b.add_request(req) {
-                            Ok(_) => added += 1,
-                            Err(e) => errors.push(format!("{url}: {e}")),
-                        }
-                    }
-                    Err(_) => errors.push("invalid item".to_string()),
+                    Ok(req) => requests.push(req),
+                    Err(_) => bad += 1,
                 }
             }
-            json_resp(200, json!({ "added": added, "errors": errors }))
+            let mut r = add_or_queue(ctx, requests, true);
+            if bad > 0
+                && let Ok(mut v) = serde_json::from_slice::<Value>(&r.body)
+            {
+                if let Some(errors) = v["errors"].as_array_mut() {
+                    errors.extend((0..bad).map(|_| json!("invalid item")));
+                }
+                r.body = v.to_string().into_bytes();
+            }
+            r
         }
+        ("POST", "/api/probe") => {
+            let (Some(pid), Some(index)) = (
+                parsed.get("pending_id").and_then(Value::as_u64),
+                parsed.get("index").and_then(Value::as_u64),
+            ) else {
+                return err(400, "pending_id and index missing");
+            };
+            let request = {
+                let list = ctx.pending();
+                list.iter()
+                    .find(|p| p.id == pid)
+                    .and_then(|p| p.items.get(index as usize))
+                    .cloned()
+            };
+            let Some(request) = request else {
+                return err(404, "no such pending download");
+            };
+            match b.probe(&request) {
+                Ok(info) => json_resp(
+                    200,
+                    json!({
+                        "file_name": info.file_name,
+                        "total": info.total,
+                        "resumable": info.resumable,
+                        "category": info.category.label().to_lowercase(),
+                        "dir": info.dir.to_string_lossy(),
+                        "exists": info.exists,
+                    }),
+                ),
+                Err(e) => err(502, &sushload_core::redact::redact_text(&e)),
+            }
+        }
+        ("POST", "/api/confirm") => confirm(ctx, &parsed),
+        ("POST", "/api/discard") => {
+            let Some(pid) = parsed.get("pending_id").and_then(Value::as_u64) else {
+                return err(400, "pending_id missing");
+            };
+            let mut list = ctx.pending();
+            let before = list.len();
+            list.retain(|p| p.id != pid);
+            if list.len() == before {
+                return err(404, "no such pending download");
+            }
+            log::info!(target: "server", "discard pending={pid}");
+            json_resp(200, json!({ "ok": true }))
+        }
+        ("POST", "/api/exists") => {
+            let (Some(dir), Some(name)) = (
+                parsed.get("dir").and_then(Value::as_str),
+                parsed.get("file_name").and_then(Value::as_str),
+            ) else {
+                return err(400, "dir and file_name missing");
+            };
+            if !Path::new(dir).is_absolute() {
+                return err(400, "dir must be an absolute path");
+            }
+            let taken = categories::name_taken(Path::new(dir), &sanitize_file_name(name));
+            json_resp(200, json!({ "exists": taken }))
+        }
+        ("POST", "/api/open_logs") => match b.open_logs() {
+            Ok(()) => json_resp(200, json!({ "ok": true })),
+            Err(e) => err(500, &e),
+        },
         ("POST", "/api/reveal_extension") => match b.reveal_extension() {
             Ok(()) => json_resp(200, json!({ "ok": true })),
             Err(e) => err(404, &e),
@@ -386,7 +586,7 @@ pub fn handle<B: Backend>(
             b.resume_all();
             json_resp(200, json!({ "ok": true }))
         }
-        ("POST", "/api/settings") => match parse_settings(&parsed) {
+        ("POST", "/api/settings") => match parse_settings(&parsed, &b.settings()) {
             Ok(s) => {
                 b.set_settings(s);
                 json_resp(
@@ -426,6 +626,158 @@ pub fn handle<B: Backend>(
     }
 }
 
+/// Starts the requests right away, or (confirmation on) parks them as one pending entry.
+fn add_or_queue<B: Backend>(ctx: &Ctx<B>, items: Vec<AddRequest>, notify: bool) -> Response {
+    let b = &ctx.backend;
+    let mut errors = Vec::new();
+    if b.settings().confirm_new_downloads {
+        let mut valid = Vec::new();
+        for req in items {
+            match validate_request(&req) {
+                Ok(()) => valid.push(req),
+                // Errors name the URL only; cookies never leave the request.
+                Err(e) => errors.push(format!(
+                    "{}: {e}",
+                    sushload_core::redact::redact_url(&req.url)
+                )),
+            }
+        }
+        let queued = valid.len();
+        if queued > 0 {
+            let first = {
+                let mut list = ctx.pending();
+                if list.len() >= MAX_PENDING {
+                    return err(429, "too many downloads are waiting for confirmation");
+                }
+                let first = list.is_empty();
+                let mut next = ctx.next_pending.lock().unwrap_or_else(|e| e.into_inner());
+                let id = *next;
+                *next += 1;
+                log::info!(target: "server", "queued {queued} item(s) for confirmation (pending={id})");
+                list.push(Pending { id, items: valid });
+                first
+            };
+            if notify {
+                (ctx.notify)(first);
+            }
+        }
+        return json_resp(
+            200,
+            json!({ "added": 0, "queued": queued, "confirm": true, "errors": errors }),
+        );
+    }
+    let mut added = 0u32;
+    for req in items {
+        let url = req.url.clone();
+        match b.add_request(req) {
+            Ok(_) => added += 1,
+            Err(e) => errors.push(format!("{}: {e}", sushload_core::redact::redact_url(&url))),
+        }
+    }
+    json_resp(
+        200,
+        json!({ "added": added, "queued": 0, "confirm": false, "errors": errors }),
+    )
+}
+
+/// The dialog's answer for one pending entry: which items to start (with their final name,
+/// category, folder and overwrite choice), whether to add them paused, and settings to remember.
+fn confirm<B: Backend>(ctx: &Ctx<B>, body: &Value) -> Response {
+    let b = &ctx.backend;
+    let Some(pid) = body.get("pending_id").and_then(Value::as_u64) else {
+        return err(400, "pending_id missing");
+    };
+    let Some(specs) = body.get("items").and_then(Value::as_array) else {
+        return err(400, "items missing");
+    };
+    let entry = {
+        let mut list = ctx.pending();
+        match list.iter().position(|p| p.id == pid) {
+            Some(i) => list.remove(i),
+            None => return err(404, "no such pending download"),
+        }
+    };
+    let paused = body
+        .get("start_paused")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let shared_dir = body
+        .get("dir")
+        .and_then(Value::as_str)
+        .filter(|d| !d.is_empty());
+    let mut added = 0u32;
+    let mut errors = Vec::new();
+    let mut remember: Option<(Category, PathBuf)> = None;
+    for spec in specs {
+        let Some(mut req) = spec
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|i| entry.items.get(i as usize))
+            .cloned()
+        else {
+            errors.push("invalid item".to_string());
+            continue;
+        };
+        if let Some(name) = spec.get("file_name").and_then(Value::as_str)
+            && !name.trim().is_empty()
+        {
+            req.file_name = Some(name.to_string());
+        }
+        req.category = spec
+            .get("category")
+            .and_then(Value::as_str)
+            .and_then(category_from);
+        req.dir = spec
+            .get("dir")
+            .and_then(Value::as_str)
+            .or(shared_dir)
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from);
+        req.overwrite = spec
+            .get("overwrite")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        req.start_paused = paused;
+        if entry.items.len() == 1
+            && let Some(dir) = &req.dir
+        {
+            let category = req
+                .category
+                .unwrap_or_else(|| categories::classify(req.file_name.as_deref().unwrap_or("")));
+            remember = Some((category, dir.clone()));
+        }
+        let url = req.url.clone();
+        match b.add_request(req) {
+            Ok(_) => added += 1,
+            Err(e) => errors.push(format!("{}: {e}", sushload_core::redact::redact_url(&url))),
+        }
+    }
+    let remember_dir = body
+        .get("remember_dir")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let dont_ask = body
+        .get("dont_ask")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if (remember_dir && remember.is_some()) || dont_ask {
+        let mut settings = b.settings();
+        if remember_dir && let Some((category, dir)) = remember {
+            settings.category_dirs.insert(category, dir);
+        }
+        if dont_ask {
+            settings.confirm_new_downloads = false;
+        }
+        b.set_settings(settings);
+    }
+    log::info!(
+        target: "server",
+        "confirm pending={pid} added={added} paused={paused} errors={}",
+        errors.len()
+    );
+    json_resp(200, json!({ "added": added, "errors": errors }))
+}
+
 /// Random 128-bit token as 32 hex chars, from `/dev/urandom`.
 pub fn random_token() -> std::io::Result<String> {
     let mut buf = [0u8; 16];
@@ -439,7 +791,11 @@ pub struct RunningServer {
 }
 
 /// Binds 127.0.0.1 (preferred port, else OS-chosen) and serves on a background thread.
-pub fn start(engine: Engine, preferred_port: u16) -> Result<RunningServer, String> {
+pub fn start(
+    engine: Engine,
+    preferred_port: u16,
+    attention: Attention,
+) -> Result<RunningServer, String> {
     let token = random_token().map_err(|e| format!("cannot read /dev/urandom: {e}"))?;
     let server = tiny_http::Server::http(("127.0.0.1", preferred_port))
         .or_else(|_| tiny_http::Server::http(("127.0.0.1", 0)))
@@ -449,11 +805,16 @@ pub fn start(engine: Engine, preferred_port: u16) -> Result<RunningServer, Strin
         .to_ip()
         .map(|a| a.port())
         .ok_or("server has no IP address")?;
-    let ctx = Arc::new(Ctx {
-        backend: engine,
-        token: token.clone(),
-        port,
-    });
+    let page = format!("http://127.0.0.1:{port}/?t={token}");
+    let notify: Notify = match attention {
+        Attention::Window => Box::new(|_| crate::window::request_attention()),
+        Attention::Browser { open } => Box::new(move |first| {
+            if first && open {
+                crate::open_in_browser(&page);
+            }
+        }),
+    };
+    let ctx = Arc::new(Ctx::new(engine, token.clone(), port, notify));
     std::thread::Builder::new()
         .name("sushload-http".into())
         .spawn(move || {
@@ -488,6 +849,10 @@ fn serve_one<B: Backend>(ctx: &Ctx<B>, mut req: tiny_http::Request) {
     }
     let _ = req.as_reader().take(MAX_BODY as u64).read_to_end(&mut body);
     let r = handle(ctx, &method, &url, &headers, &body);
+    if r.status >= 400 {
+        let path = url.split(['?', '#']).next().unwrap_or("");
+        log::warn!(target: "server", "{method} {path} -> {}", r.status);
+    }
     let mut resp = tiny_http::Response::from_data(r.body).with_status_code(r.status);
     for (k, v) in [
         ("Content-Type", r.content_type),
@@ -510,21 +875,12 @@ mod tests {
 
     #[derive(Default)]
     struct Mock {
-        added: Mutex<Vec<String>>,
         requests: Mutex<Vec<AddRequest>>,
         settings: Mutex<Option<Settings>>,
         removed: Mutex<Vec<(u64, bool)>>,
     }
 
     impl Backend for Mock {
-        fn add(&self, url: &str) -> Result<u64, String> {
-            if !url.starts_with("http") {
-                return Err("invalid URL".into());
-            }
-            let mut a = self.added.lock().unwrap();
-            a.push(url.to_string());
-            Ok(a.len() as u64)
-        }
         fn add_request(&self, req: AddRequest) -> Result<u64, String> {
             if !req.url.starts_with("http") {
                 return Err("invalid URL".into());
@@ -579,14 +935,54 @@ mod tests {
         fn reveal_extension(&self) -> Result<(), String> {
             Ok(())
         }
+        fn probe(&self, req: &AddRequest) -> Result<ProbeInfo, String> {
+            if req.url.contains("broken") {
+                return Err("HTTP 403".into());
+            }
+            Ok(ProbeInfo {
+                file_name: req.file_name.clone().unwrap_or_else(|| "probed.zip".into()),
+                total: Some(1234),
+                resumable: true,
+                category: Category::Archives,
+                dir: PathBuf::from("/tmp/dl/Archives"),
+                exists: true,
+            })
+        }
+        fn open_logs(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    /// Confirmation on (the default): hand-overs wait in the pending list. The second value
+    /// records every attention call (true = the list was empty before).
+    fn ctx_notes() -> (Ctx<Mock>, Arc<Mutex<Vec<bool>>>) {
+        let notes: Arc<Mutex<Vec<bool>>> = Arc::default();
+        let sink = Arc::clone(&notes);
+        let c = Ctx::new(
+            Mock::default(),
+            "tok123".into(),
+            47815,
+            Box::new(move |first| sink.lock().unwrap().push(first)),
+        );
+        (c, notes)
     }
 
     fn ctx() -> Ctx<Mock> {
-        Ctx {
-            backend: Mock::default(),
-            token: "tok123".into(),
-            port: 47815,
-        }
+        ctx_notes().0
+    }
+
+    /// Confirmation off: hand-overs go straight to the engine.
+    fn ctx_direct() -> Ctx<Mock> {
+        let c = ctx();
+        c.backend.set_settings(Settings {
+            confirm_new_downloads: false,
+            ..Settings::default()
+        });
+        c
+    }
+
+    fn body_of(r: &Response) -> Value {
+        serde_json::from_slice(&r.body).unwrap()
     }
 
     fn hdrs(token: Option<&str>, host: &str) -> Vec<(String, String)> {
@@ -659,7 +1055,7 @@ mod tests {
 
     #[test]
     fn add_two_urls_calls_engine_twice() {
-        let c = ctx();
+        let c = ctx_direct();
         let body =
             json!({"urls": "http://a.test/1.zip\n\n  http://b.test/2.zip \nnot-a-url"}).to_string();
         let r = call(&c, "POST", "/api/add", Some("tok123"), &body);
@@ -667,15 +1063,20 @@ mod tests {
         let v: Value = serde_json::from_slice(&r.body).unwrap();
         assert_eq!(v["added"], 2);
         assert_eq!(v["errors"].as_array().unwrap().len(), 1);
-        assert_eq!(
-            *c.backend.added.lock().unwrap(),
-            vec!["http://a.test/1.zip", "http://b.test/2.zip"]
-        );
+        let urls: Vec<String> = c
+            .backend
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.url.clone())
+            .collect();
+        assert_eq!(urls, vec!["http://a.test/1.zip", "http://b.test/2.zip"]);
     }
 
     #[test]
     fn add_request_passes_browser_context() {
-        let c = ctx();
+        let c = ctx_direct();
         assert_eq!(call(&c, "POST", "/api/add_request", None, "{}").status, 401);
         let body = json!({"items": [
             {"url": "https://a.test/f.zip", "file_name": "f.zip", "referer": "https://a.test/",
@@ -917,6 +1318,284 @@ mod tests {
         );
         assert_eq!(call(&c, "GET", "/nope", None, "").status, 404);
         assert_eq!(call(&c, "GET", "/api/nope", Some("tok123"), "").status, 404);
+    }
+
+    fn post(c: &Ctx<Mock>, path: &str, body: Value) -> Response {
+        call(c, "POST", path, Some("tok123"), &body.to_string())
+    }
+
+    fn state(c: &Ctx<Mock>) -> Value {
+        body_of(&call(c, "GET", "/api/state", Some("tok123"), ""))
+    }
+
+    #[test]
+    fn confirm_on_parks_hand_overs_instead_of_starting_them() {
+        let (c, notes) = ctx_notes();
+        let r = post(
+            &c,
+            "/api/add_request",
+            json!({"items": [
+                {"url": "https://a.test/one.zip", "cookies": "sid=SECRET9", "referer": "https://a.test/"},
+                {"url": "ftp://bad.test/x"},
+            ]}),
+        );
+        assert_eq!(r.status, 200);
+        let v = body_of(&r);
+        assert_eq!(
+            (v["added"].clone(), v["queued"].clone()),
+            (json!(0), json!(1))
+        );
+        assert_eq!(v["confirm"], true);
+        assert_eq!(v["errors"].as_array().unwrap().len(), 1);
+        assert!(
+            c.backend.requests.lock().unwrap().is_empty(),
+            "engine must not see it yet"
+        );
+
+        let st = state(&c);
+        let text = serde_json::to_string(&st).unwrap();
+        assert!(
+            !text.contains("SECRET9"),
+            "cookie leaked to the page: {text}"
+        );
+        assert_eq!(st["pending"].as_array().unwrap().len(), 1);
+        assert_eq!(st["pending"][0]["batch"], false);
+        assert_eq!(
+            st["pending"][0]["items"][0]["url"],
+            "https://a.test/one.zip"
+        );
+        assert_eq!(st["settings"]["confirm_new_downloads"], true);
+        assert_eq!(
+            st["default_dirs"]["archives"],
+            "/tmp/dl/Archives".replace(
+                "/tmp/dl",
+                &Settings::default().download_dir.to_string_lossy()
+            )
+        );
+
+        // A second arrival while the first still waits is not "first".
+        post(
+            &c,
+            "/api/add_request",
+            json!({"items": [{"url": "https://b.test/two.zip"}]}),
+        );
+        assert_eq!(*notes.lock().unwrap(), vec![true, false]);
+        assert_eq!(state(&c)["pending"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn add_url_dialog_queues_a_batch_without_asking_for_attention() {
+        let (c, notes) = ctx_notes();
+        let r = post(
+            &c,
+            "/api/add",
+            json!({"urls": "http://a.test/1.zip\nhttp://b.test/2.zip\nnope"}),
+        );
+        let v = body_of(&r);
+        assert_eq!(v["queued"], 2);
+        assert_eq!(v["errors"].as_array().unwrap().len(), 1);
+        assert!(notes.lock().unwrap().is_empty());
+        let st = state(&c);
+        assert_eq!(st["pending"][0]["batch"], true);
+        assert_eq!(st["pending"][0]["items"].as_array().unwrap().len(), 2);
+        assert!(c.backend.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn confirm_starts_with_the_chosen_name_folder_and_keeps_cookies() {
+        let c = ctx();
+        post(
+            &c,
+            "/api/add_request",
+            json!({"items": [{"url": "https://a.test/one.zip", "cookies": "sid=KEEPME", "user_agent": "UA/2"}]}),
+        );
+        let pid = state(&c)["pending"][0]["id"].as_u64().unwrap();
+        let r = post(
+            &c,
+            "/api/confirm",
+            json!({"pending_id": pid, "start_paused": true, "remember_dir": true, "dont_ask": true,
+                   "items": [{"index": 0, "file_name": "renamed.zip", "category": "archives",
+                              "dir": "/Volumes/Big/Zips", "overwrite": true}]}),
+        );
+        assert_eq!(r.status, 200);
+        assert_eq!(body_of(&r)["added"], 1);
+        let got = c.backend.requests.lock().unwrap().clone();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].file_name.as_deref(), Some("renamed.zip"));
+        assert_eq!(got[0].dir, Some(PathBuf::from("/Volumes/Big/Zips")));
+        assert_eq!(got[0].category, Some(Category::Archives));
+        assert!(got[0].overwrite && got[0].start_paused);
+        assert_eq!(got[0].cookies.as_deref(), Some("sid=KEEPME"));
+        assert_eq!(got[0].user_agent.as_deref(), Some("UA/2"));
+        let s = c.backend.settings();
+        assert!(!s.confirm_new_downloads, "Don't ask again");
+        assert_eq!(
+            s.category_dirs.get(&Category::Archives),
+            Some(&PathBuf::from("/Volumes/Big/Zips"))
+        );
+        assert!(state(&c)["pending"].as_array().unwrap().is_empty());
+        assert_eq!(
+            post(&c, "/api/confirm", json!({"pending_id": pid, "items": []})).status,
+            404
+        );
+    }
+
+    #[test]
+    fn batch_confirm_starts_only_checked_items_in_one_shared_folder() {
+        let c = ctx();
+        post(
+            &c,
+            "/api/add_request",
+            json!({"items": [{"url": "https://a.test/1.zip"}, {"url": "https://a.test/2.mp4"}, {"url": "https://a.test/3.pdf"}]}),
+        );
+        let pid = state(&c)["pending"][0]["id"].as_u64().unwrap();
+        post(
+            &c,
+            "/api/confirm",
+            json!({"pending_id": pid, "dir": "/tmp/shared", "remember_dir": true,
+                   "items": [{"index": 0, "category": "archives"}, {"index": 2, "category": "documents"}]}),
+        );
+        let got = c.backend.requests.lock().unwrap().clone();
+        let urls: Vec<_> = got.iter().map(|r| r.url.as_str()).collect();
+        assert_eq!(urls, ["https://a.test/1.zip", "https://a.test/3.pdf"]);
+        assert!(
+            got.iter()
+                .all(|r| r.dir == Some(PathBuf::from("/tmp/shared")))
+        );
+        // A shared folder is never remembered for one category.
+        assert!(c.backend.settings().category_dirs.is_empty());
+        assert!(c.backend.settings().confirm_new_downloads);
+    }
+
+    #[test]
+    fn discard_drops_the_pending_entry() {
+        let c = ctx();
+        post(
+            &c,
+            "/api/add_request",
+            json!({"items": [{"url": "https://a.test/x.zip"}]}),
+        );
+        let pid = state(&c)["pending"][0]["id"].as_u64().unwrap();
+        assert_eq!(
+            post(&c, "/api/discard", json!({"pending_id": pid})).status,
+            200
+        );
+        assert!(state(&c)["pending"].as_array().unwrap().is_empty());
+        assert!(c.backend.requests.lock().unwrap().is_empty());
+        assert_eq!(
+            post(&c, "/api/discard", json!({"pending_id": pid})).status,
+            404
+        );
+        assert_eq!(post(&c, "/api/discard", json!({})).status, 400);
+        assert_eq!(call(&c, "POST", "/api/discard", None, "{}").status, 401);
+    }
+
+    #[test]
+    fn probe_uses_the_stored_request() {
+        let c = ctx();
+        post(
+            &c,
+            "/api/add_request",
+            json!({"items": [{"url": "https://a.test/x.zip"}, {"url": "https://a.test/broken"}]}),
+        );
+        let pid = state(&c)["pending"][0]["id"].as_u64().unwrap();
+        let r = post(&c, "/api/probe", json!({"pending_id": pid, "index": 0}));
+        let v = body_of(&r);
+        assert_eq!(r.status, 200);
+        assert_eq!(
+            (
+                v["total"].clone(),
+                v["resumable"].clone(),
+                v["exists"].clone()
+            ),
+            (json!(1234), json!(true), json!(true))
+        );
+        assert_eq!(v["category"], "archives");
+        let r = post(&c, "/api/probe", json!({"pending_id": pid, "index": 1}));
+        assert_eq!(r.status, 502);
+        assert_eq!(body_of(&r)["error"], "HTTP 403");
+        assert_eq!(
+            post(&c, "/api/probe", json!({"pending_id": 999, "index": 0})).status,
+            404
+        );
+    }
+
+    #[test]
+    fn confirm_off_sends_straight_to_the_engine() {
+        let c = ctx_direct();
+        let r = post(
+            &c,
+            "/api/add_request",
+            json!({"items": [{"url": "https://a.test/x.zip"}]}),
+        );
+        let v = body_of(&r);
+        assert_eq!(
+            (
+                v["added"].clone(),
+                v["queued"].clone(),
+                v["confirm"].clone()
+            ),
+            (json!(1), json!(0), json!(false))
+        );
+        assert_eq!(c.backend.requests.lock().unwrap().len(), 1);
+        assert!(state(&c)["pending"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn exists_and_new_settings_fields() {
+        let c = ctx();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("here.bin"), b"x").unwrap();
+        let d = dir.path().to_string_lossy().to_string();
+        let r = post(
+            &c,
+            "/api/exists",
+            json!({"dir": d, "file_name": "here.bin"}),
+        );
+        assert_eq!(body_of(&r)["exists"], true);
+        let r = post(
+            &c,
+            "/api/exists",
+            json!({"dir": d, "file_name": "nope.bin"}),
+        );
+        assert_eq!(body_of(&r)["exists"], false);
+        assert_eq!(
+            post(&c, "/api/exists", json!({"dir": "rel", "file_name": "a"})).status,
+            400
+        );
+
+        let mut body: Value = serde_json::from_str(&settings_body(3, 8)).unwrap();
+        body["confirm_new_downloads"] = json!(false);
+        body["notify_on_complete"] = json!(false);
+        body["category_dirs"] = json!({"video": "/Volumes/M", "images": ""});
+        let r = post(&c, "/api/settings", body.clone());
+        assert_eq!(r.status, 200);
+        let v = body_of(&r);
+        assert_eq!(v["settings"]["confirm_new_downloads"], false);
+        assert_eq!(v["settings"]["notify_on_complete"], false);
+        assert_eq!(
+            v["settings"]["category_dirs"],
+            json!({"video": "/Volumes/M"})
+        );
+        // Leaving the new keys out keeps what is stored.
+        let r = call(
+            &c,
+            "POST",
+            "/api/settings",
+            Some("tok123"),
+            &settings_body(3, 8),
+        );
+        let v = body_of(&r);
+        assert_eq!(v["settings"]["confirm_new_downloads"], false);
+        assert_eq!(
+            v["settings"]["category_dirs"],
+            json!({"video": "/Volumes/M"})
+        );
+        body["category_dirs"] = json!({"video": "relative"});
+        assert_eq!(post(&c, "/api/settings", body.clone()).status, 400);
+        body["category_dirs"] = json!({"bogus": "/x"});
+        assert_eq!(post(&c, "/api/settings", body).status, 400);
+        assert_eq!(post(&c, "/api/open_logs", json!({})).status, 200);
     }
 
     #[test]

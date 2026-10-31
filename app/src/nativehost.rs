@@ -66,6 +66,16 @@ pub fn write_message<W: Write>(w: &mut W, v: &Value) -> Result<(), String> {
 // ---------- talking to the running app ----------
 
 fn http_post(port: u16, token: &str, path: &str, body: &str) -> Result<Value, String> {
+    http_call("POST", port, token, path, body)
+}
+
+fn http_call(
+    method: &str,
+    port: u16,
+    token: &str,
+    path: &str,
+    body: &str,
+) -> Result<Value, String> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
         .map_err(|e| format!("cannot reach sushLoad: {e}"))?;
@@ -73,7 +83,7 @@ fn http_post(port: u16, token: &str, path: &str, body: &str) -> Result<Value, St
     let _ = s.set_read_timeout(t);
     let _ = s.set_write_timeout(t);
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Sushload-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Sushload-Token: {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     s.write_all(req.as_bytes())
@@ -154,10 +164,18 @@ pub fn handle_message(dir: &Path, msg: &Value) -> Value {
     let version = env!("CARGO_PKG_VERSION");
     match msg.get("type").and_then(Value::as_str) {
         Some("ping") => {
-            let running = crate::running_instance(dir).is_some();
-            json!({ "ok": true, "running": running, "version": version })
+            log::debug!(target: "host", "message type=ping");
+            let instance = crate::running_instance(dir);
+            // Does the app ask before starting a download? The popup words itself accordingly.
+            let confirm = instance
+                .as_ref()
+                .and_then(|(port, token)| http_call("GET", *port, token, "/api/state", "").ok())
+                .and_then(|state| state["settings"]["confirm_new_downloads"].as_bool())
+                .unwrap_or(false);
+            json!({ "ok": true, "running": instance.is_some(), "version": version, "confirm": confirm })
         }
         Some("open") => {
+            log::info!(target: "host", "message type=open");
             let _ = Command::new("open").args(["-b", crate::BUNDLE_ID]).status();
             json!({ "ok": true })
         }
@@ -165,9 +183,17 @@ pub fn handle_message(dir: &Path, msg: &Value) -> Value {
             let Some(items) = msg.get("items").filter(|i| i.is_array()) else {
                 return json!({ "ok": false, "error": "items missing" });
             };
+            log::info!(
+                target: "host",
+                "message type=add items={}",
+                items.as_array().map_or(0, Vec::len)
+            );
             let (port, token) = match ensure_running(dir) {
                 Ok(r) => r,
-                Err(e) => return json!({ "ok": false, "error": e }),
+                Err(e) => {
+                    log::warn!(target: "host", "add failed: {e}");
+                    return json!({ "ok": false, "error": e });
+                }
             };
             match http_post(
                 port,
@@ -177,16 +203,30 @@ pub fn handle_message(dir: &Path, msg: &Value) -> Value {
             ) {
                 Ok(v) => {
                     let added = v.get("added").and_then(Value::as_u64).unwrap_or(0);
+                    // Waiting for the user's answer in the app's "Download File Info" dialog.
+                    let queued = v.get("queued").and_then(Value::as_u64).unwrap_or(0);
+                    let confirm = v.get("confirm").and_then(Value::as_bool).unwrap_or(false);
                     let errors = v.get("errors").cloned().unwrap_or(json!([]));
                     let failed = errors.as_array().is_some_and(|a| !a.is_empty());
-                    if added == 0 && failed {
+                    log::info!(
+                        target: "host",
+                        "add result added={added} queued={queued} errors={}",
+                        errors.as_array().map_or(0, Vec::len)
+                    );
+                    if added + queued == 0 && failed {
                         let first = errors[0].as_str().unwrap_or("could not add");
                         json!({ "ok": false, "added": 0, "error": first, "errors": errors })
                     } else {
-                        json!({ "ok": true, "added": added, "errors": errors })
+                        json!({
+                            "ok": true, "added": added + queued, "queued": queued,
+                            "confirm": confirm, "errors": errors,
+                        })
                     }
                 }
-                Err(e) => json!({ "ok": false, "error": e }),
+                Err(e) => {
+                    log::warn!(target: "host", "add failed: {e}");
+                    json!({ "ok": false, "error": e })
+                }
             }
         }
         _ => json!({ "ok": false, "error": "unknown message type" }),

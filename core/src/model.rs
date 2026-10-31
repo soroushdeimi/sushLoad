@@ -1,7 +1,9 @@
 //! Shared types between the engine (`engine`) and the UI (`sushload` app crate).
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Stable id of a download, unique for the lifetime of the state file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -44,12 +46,19 @@ impl Status {
 /// File category, decided from the file extension (see `categories`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Category {
+    #[serde(alias = "video")]
     Video,
+    #[serde(alias = "music")]
     Music,
+    #[serde(alias = "documents")]
     Documents,
+    #[serde(alias = "archives")]
     Archives,
+    #[serde(alias = "programs")]
     Programs,
+    #[serde(alias = "images")]
     Images,
+    #[serde(alias = "other")]
     Other,
 }
 
@@ -179,6 +188,13 @@ pub struct Settings {
     pub proxy_mode: ProxyMode,
     /// Used when `proxy_mode == Custom`; must pass `validate_proxy_url`.
     pub proxy_url: String,
+    /// Ask (file name, category, folder) before a new download starts. The UI does the asking;
+    /// the engine itself always starts what it is given.
+    pub confirm_new_downloads: bool,
+    /// Per-category folders that win over `download_dir` / `sort_into_categories`.
+    pub category_dirs: HashMap<Category, PathBuf>,
+    /// Tell the user (macOS notification) when a download finishes or fails.
+    pub notify_on_complete: bool,
 }
 
 impl Default for Settings {
@@ -194,6 +210,9 @@ impl Default for Settings {
             speed_limit: 0,
             proxy_mode: ProxyMode::System,
             proxy_url: String::new(),
+            confirm_new_downloads: true,
+            category_dirs: HashMap::new(),
+            notify_on_complete: true,
         }
     }
 }
@@ -210,6 +229,46 @@ pub struct AddRequest {
     /// another host, and never shown in the UI or in errors.
     pub cookies: Option<String>,
     pub user_agent: Option<String>,
+    /// Save into this absolute folder instead of the category folder.
+    pub dir: Option<PathBuf>,
+    /// Use this category instead of the one derived from the file name.
+    pub category: Option<Category>,
+    /// Add it as `Paused` instead of starting it ("Download later").
+    pub start_paused: bool,
+    /// Replace an existing file of the same name instead of picking `name (1).ext`.
+    pub overwrite: bool,
+}
+
+/// What `Engine::probe` learned about a URL with one `Range: bytes=0-0` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeInfo {
+    /// The name the download would get (request override, Content-Disposition or URL).
+    pub file_name: String,
+    /// None when the server did not say.
+    pub total: Option<u64>,
+    pub resumable: bool,
+    pub category: Category,
+    /// The folder the file would be saved to.
+    pub dir: PathBuf,
+    /// A file (or `.part`) with that name is already in `dir`.
+    pub exists: bool,
+}
+
+/// Something worth telling the user about, emitted once per state change (never polled).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    Completed {
+        id: DownloadId,
+        file_name: String,
+        path: PathBuf,
+        total: u64,
+        elapsed: Duration,
+    },
+    Failed {
+        id: DownloadId,
+        file_name: String,
+        error: String,
+    },
 }
 
 /// Read-only snapshot of one download for the UI (`Engine::snapshot`).

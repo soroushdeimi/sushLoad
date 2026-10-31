@@ -13,7 +13,7 @@ const flip = el => {
   return on;
 };
 $('enabled').setAttribute('aria-checked', String(s.enabled));
-$('ask').setAttribute('aria-checked', String(s.ask));
+$('askFirst').setAttribute('aria-checked', String(s.askFirst));
 $('exts').value = s.exts.join(' ');
 $('docExts').value = s.docExts.join(' ');
 $('minSize').value = s.minSizeMB;
@@ -34,7 +34,7 @@ function save() {
     const min = Number($('minSize').value);
     await saveSettings({
       enabled: $('enabled').getAttribute('aria-checked') === 'true',
-      ask: $('ask').getAttribute('aria-checked') === 'true',
+      askFirst: $('askFirst').getAttribute('aria-checked') === 'true',
       exts: parseList($('exts').value),
       docExts: parseList($('docExts').value),
       minSizeMB: Number.isFinite(min) && min >= 0 ? min : 1,
@@ -44,7 +44,7 @@ function save() {
     setTimeout(() => { $('saved').textContent = ''; }, 1500);
   }, 350);
 }
-for (const id of ['enabled', 'ask']) $(id).addEventListener('click', () => { flip($(id)); save(); });
+for (const id of ['enabled', 'askFirst']) $(id).addEventListener('click', () => { flip($(id)); save(); });
 for (const id of ['exts', 'docExts', 'minSize', 'sites']) $(id).addEventListener('input', save);
 $('forget').addEventListener('click', async () => { await saveDecisions({}); showRemembered(); });
 showRemembered();

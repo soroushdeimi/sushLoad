@@ -60,7 +60,7 @@
     "message": "Take over downloads"
   },
   "popupCaptureHint": {
-    "message": "Ask before the browser downloads archives, videos, programs…"
+    "message": "Send archives, videos, programs… to sushLoad"
   },
   "popupOpen": {
     "message": "Open sushLoad"
@@ -171,13 +171,13 @@
     "message": "Take over downloads"
   },
   "optCaptureHint": {
-    "message": "Catch matching browser downloads and offer to send them to sushLoad. Hold Alt while clicking a link to skip this once."
+    "message": "Take over matching browser downloads and hand them to sushLoad. Hold Alt while clicking a link to skip this once."
   },
   "optAsk": {
-    "message": "Ask before taking over"
+    "message": "Ask in the browser first"
   },
   "optAskHint": {
-    "message": "Off: matching downloads go straight to sushLoad."
+    "message": "Off (default): matching downloads go straight to sushLoad, which asks for the name and folder. On: the browser asks first, then sushLoad asks too."
   },
   "optTypes": {
     "message": "File types"
@@ -217,5 +217,16 @@
   },
   "choiceChrome": {
     "message": "browser"
+  },
+  "popupConfirmNote": {
+    "message": "sushLoad will ask where to save each download."
+  },
+  "linksQueued": {
+    "message": "Sent $P1$ to sushLoad. Confirm them in the app.",
+    "placeholders": {
+      "p1": {
+        "content": "$1"
+      }
+    }
   }
 }

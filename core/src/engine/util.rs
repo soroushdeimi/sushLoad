@@ -5,6 +5,22 @@
 use percent_encoding::percent_decode_str;
 use reqwest::Url;
 
+/// `1.5 MB`-style size for log lines.
+pub fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = n as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{n} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 /// Replace path separators, colons and control characters; never return an empty file name.
 pub fn sanitize_file_name(name: &str) -> String {
     let cleaned: String = name

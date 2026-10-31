@@ -17,6 +17,7 @@ fn request(url: String) -> AddRequest {
         referer: Some(REFERER.to_string()),
         cookies: Some(COOKIE.to_string()),
         user_agent: Some(UA.to_string()),
+        ..AddRequest::default()
     }
 }
 

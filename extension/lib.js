@@ -19,7 +19,7 @@ export const categoryOf = ext => EXT_CATEGORY.get(ext) || 'other';
 
 export const DEFAULTS = {
   enabled: true,
-  ask: true,
+  askFirst: false,
   exts: [...CATEGORIES.archives, ...CATEGORIES.programs, ...CATEGORIES.video, ...CATEGORIES.music],
   docExts: [...CATEGORIES.documents],
   minSizeMB: 1,
@@ -142,14 +142,17 @@ export async function handover(items) {
     cur.push(it); size += n;
   }
   if (cur.length) chunks.push(cur);
-  let added = 0, last = null;
+  let added = 0, queued = 0, confirm = false, last = null;
   for (const c of chunks) {
     const r = await sendNative({ type: 'add', items: c });
-    if (!r.ok) return added ? { ok: true, added, error: describeError(r) } : { ...r, ok: false };
+    if (!r.ok) return added ? { ok: true, added, queued, confirm, error: describeError(r) } : { ...r, ok: false };
     added += r.added || 0;
+    queued += r.queued || 0;
+    confirm = confirm || !!r.confirm;
     last = r;
   }
-  return { ok: true, added, errors: last && last.errors };
+  // `confirm`: the app is asking the user (file name, folder…) before the downloads start.
+  return { ok: true, added, queued, confirm, errors: last && last.errors };
 }
 
 /* ---------- page helpers ---------- */
