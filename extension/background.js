@@ -35,7 +35,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     const url = info.menuItemId === 'sl-link' ? info.linkUrl : info.srcUrl;
     if (!isHttp(url)) return fail(tabId);
     const item = await buildItem({
-      url, referer: info.frameUrl || info.pageUrl || (tab && tab.url), incognito: tab && tab.incognito,
+      url, referer: info.frameUrl || info.pageUrl || (tab && tab.url), pageTitle: tab && tab.title,
+      incognito: tab && tab.incognito,
     });
     const r = await handover([item]);
     r.ok ? ok(tabId) : fail(tabId);
@@ -47,7 +48,7 @@ async function openLinkPicker(info, tab) {
   const [res] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: collectLinks });
   const links = (res && res.result) || [];
   const k = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  await session.set({ ['links:' + k]: { page: info.pageUrl || tab.url, incognito: tab.incognito, links } });
+  await session.set({ ['links:' + k]: { page: info.pageUrl || tab.url, title: tab.title, incognito: tab.incognito, links } });
   await chrome.windows.create({
     url: chrome.runtime.getURL('links.html?k=' + k), type: 'popup', width: 760, height: 640, focused: true,
   });
@@ -124,11 +125,11 @@ async function onCreated(item) {
 
   await attempt(chrome.downloads.pause(item.id));
   let referrer = item.referrer;
-  if (!referrer) {
-    const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    referrer = t && isHttp(t.url) ? t.url : '';
-  }
-  const offer = { id: item.id, url, name: name || 'download', size, host: hostOf(url), referrer, ext: c.ext };
+  const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!referrer) referrer = t && isHttp(t.url) ? t.url : '';
+  // The tab's title helps sushLoad group the site; only when that tab is the referring page.
+  const title = t && t.title && referrer && (t.url || '').split('#')[0] === referrer.split('#')[0] ? t.title : '';
+  const offer = { id: item.id, url, name: name || 'download', size, host: hostOf(url), referrer, title, ext: c.ext };
   if (decisions[c.ext] === 'sush' || !s.askFirst) {
     const r = await takeOver(offer);
     if (r.ok) ok(-1);
@@ -143,7 +144,7 @@ async function onCreated(item) {
 }
 
 async function takeOver(offer) {
-  const item = await buildItem({ url: offer.url, fileName: offer.name, referer: offer.referrer });
+  const item = await buildItem({ url: offer.url, fileName: offer.name, referer: offer.referrer, pageTitle: offer.title });
   const r = await handover([item]);
   if (r.ok) {
     // A small file may have finished before it could be paused: drop that copy too.
@@ -265,7 +266,7 @@ async function onPanelClick(sender) {
   if (current.length) list = current;
   if (!list.length) return { ok: false };
   const best = [...list].sort((a, b) => (b.size - a.size) || (b.t - a.t))[0];
-  const item = await buildItem({ url: best.url, referer: tab.url, incognito: tab.incognito });
+  const item = await buildItem({ url: best.url, referer: tab.url, pageTitle: tab.title, incognito: tab.incognito });
   const r = await handover([item]);
   r.ok ? ok(tab.id) : fail(tab.id);
   return { ok: r.ok, error: r.ok ? undefined : describeError(r) };

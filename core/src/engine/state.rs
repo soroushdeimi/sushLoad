@@ -1,7 +1,9 @@
 //! Persisted download records and the atomic `state.json` reader/writer.
 
 use crate::model::{Category, DownloadId, Segment, Settings, Status};
+use crate::sites::SiteEntry;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -53,6 +55,9 @@ pub struct StateFile {
     pub settings: Settings,
     #[serde(default)]
     pub downloads: Vec<DownloadRecord>,
+    /// Sites seen so far (site folders): the user's choices and cached AI answers.
+    #[serde(default)]
+    pub sites: HashMap<String, SiteEntry>,
 }
 
 fn state_path(data_dir: &Path) -> PathBuf {

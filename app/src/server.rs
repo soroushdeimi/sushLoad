@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use sushload_core::{
-    AddRequest, Category, DownloadId, DownloadView, Engine, ProbeInfo, ProxyMode, Settings, Status,
-    categories, sanitize_file_name, validate_proxy_url, validate_request,
+    AddRequest, Category, DownloadId, DownloadView, Engine, ProbeInfo, ProxyMode, Settings,
+    SiteFolders, SiteGroup, SiteView, Status, categories, sanitize_file_name, validate_proxy_url,
+    validate_request,
 };
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
@@ -41,6 +42,19 @@ pub trait Backend: Send + Sync + 'static {
     fn probe(&self, req: &AddRequest) -> Result<ProbeInfo, String>;
     /// Shows the log folder in Finder.
     fn open_logs(&self) -> Result<(), String>;
+    /// Domains seen by the site folders (the Settings "Sites" table).
+    fn sites(&self) -> Vec<SiteView>;
+    fn set_site(
+        &self,
+        domain: &str,
+        group: Option<SiteGroup>,
+        folder: Option<String>,
+    ) -> Result<(), String>;
+    fn reset_site(&self, domain: &str);
+    /// Site levels (`University/sharif.edu`) below the category folder; None when off.
+    fn site_subpath(&self, req: &AddRequest) -> Option<PathBuf>;
+    /// Can the on-device helper classify sites right now? May take a moment.
+    fn ai_available(&self) -> bool;
 }
 
 impl Backend for Engine {
@@ -113,6 +127,26 @@ impl Backend for Engine {
                 let _ = c.wait();
             })
             .map_err(|e| e.to_string())
+    }
+    fn sites(&self) -> Vec<SiteView> {
+        Engine::sites(self)
+    }
+    fn set_site(
+        &self,
+        domain: &str,
+        group: Option<SiteGroup>,
+        folder: Option<String>,
+    ) -> Result<(), String> {
+        Engine::set_site(self, domain, group, folder)
+    }
+    fn reset_site(&self, domain: &str) {
+        Engine::reset_site(self, domain)
+    }
+    fn site_subpath(&self, req: &AddRequest) -> Option<PathBuf> {
+        Engine::site_subpath(self, req)
+    }
+    fn ai_available(&self) -> bool {
+        Engine::ai_available(self)
     }
     fn reveal_extension(&self) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -253,6 +287,8 @@ fn settings_json(s: &Settings) -> Value {
         "proxy_url": s.proxy_url,
         "confirm_new_downloads": s.confirm_new_downloads,
         "notify_on_complete": s.notify_on_complete,
+        "site_folders": s.site_folders.id(),
+        "ai_site_groups": s.ai_site_groups,
         "category_dirs": s.category_dirs.iter()
             .map(|(c, d)| (c.label().to_lowercase(), json!(d.to_string_lossy())))
             .collect::<serde_json::Map<String, Value>>(),
@@ -279,7 +315,23 @@ fn category_from(label: &str) -> Option<Category> {
         .find(|c| c.label().eq_ignore_ascii_case(label))
 }
 
-fn pending_json(list: &[Pending]) -> Value {
+fn sites_json(list: &[SiteView]) -> Value {
+    list.iter()
+        .map(|s| {
+            json!({
+                "domain": s.domain,
+                "group": s.group.id(),
+                "origin": s.origin,
+                "folder": s.folder,
+                "user_group": s.user_group.map(SiteGroup::id),
+                "user_folder": s.user_folder,
+            })
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn pending_json<B: Backend>(b: &B, list: &[Pending]) -> Value {
     list.iter()
         .map(|p| {
             json!({
@@ -291,6 +343,8 @@ fn pending_json(list: &[Pending]) -> Value {
                     "url": r.url,
                     "file_name": r.file_name,
                     "referer": r.referer,
+                    // Site levels below the category folder, so the dialog can show them.
+                    "site_rel": b.site_subpath(r).map(|p| p.to_string_lossy().into_owned()),
                 })).collect::<Vec<_>>(),
             })
         })
@@ -373,6 +427,12 @@ pub fn parse_settings(v: &Value, base: &Settings) -> Result<Settings, String> {
         }
         Some(_) => return Err("category_dirs must be an object".into()),
     };
+    let site_folders = match v.get("site_folders").and_then(Value::as_str) {
+        None => base.site_folders,
+        Some(id) => {
+            SiteFolders::from_id(id).ok_or_else(|| format!("unknown site_folders \"{id}\""))?
+        }
+    };
     Ok(Settings {
         download_dir: dir,
         sort_into_categories: sort,
@@ -384,6 +444,8 @@ pub fn parse_settings(v: &Value, base: &Settings) -> Result<Settings, String> {
         confirm_new_downloads: flag("confirm_new_downloads", base.confirm_new_downloads),
         category_dirs,
         notify_on_complete: flag("notify_on_complete", base.notify_on_complete),
+        site_folders,
+        ai_site_groups: flag("ai_site_groups", base.ai_site_groups),
     })
 }
 
@@ -449,7 +511,7 @@ pub fn handle<B: Backend>(
                 "downloads": b.snapshot().iter().map(view_json).collect::<Vec<_>>(),
                 "settings": settings_json(&b.settings()),
                 "default_dirs": default_dirs_json(&b.settings()),
-                "pending": pending_json(&ctx.pending()),
+                "pending": pending_json(b, &ctx.pending()),
             }),
         ),
         ("POST", "/api/add") => {
@@ -552,6 +614,35 @@ pub fn handle<B: Backend>(
             }
             let taken = categories::name_taken(Path::new(dir), &sanitize_file_name(name));
             json_resp(200, json!({ "exists": taken }))
+        }
+        ("GET", "/api/sites") => json_resp(200, json!({ "sites": sites_json(&b.sites()) })),
+        ("GET", "/api/ai_status") => json_resp(200, json!({ "available": b.ai_available() })),
+        ("POST", "/api/sites") => {
+            let Some(domain) = parsed.get("domain").and_then(Value::as_str) else {
+                return err(400, "domain missing");
+            };
+            let group = match parsed.get("group").and_then(Value::as_str) {
+                None | Some("") | Some("auto") => None,
+                Some(id) => match SiteGroup::from_id(id) {
+                    Some(g) => Some(g),
+                    None => return err(400, "unknown group"),
+                },
+            };
+            let folder = parsed
+                .get("folder")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            match b.set_site(domain, group, folder) {
+                Ok(()) => json_resp(200, json!({ "ok": true, "sites": sites_json(&b.sites()) })),
+                Err(e) => err(400, &e),
+            }
+        }
+        ("POST", "/api/sites_reset") => {
+            let Some(domain) = parsed.get("domain").and_then(Value::as_str) else {
+                return err(400, "domain missing");
+            };
+            b.reset_site(domain);
+            json_resp(200, json!({ "ok": true, "sites": sites_json(&b.sites()) }))
         }
         ("POST", "/api/open_logs") => match b.open_logs() {
             Ok(()) => json_resp(200, json!({ "ok": true })),
@@ -744,7 +835,16 @@ fn confirm<B: Backend>(ctx: &Ctx<B>, body: &Value) -> Response {
             let category = req
                 .category
                 .unwrap_or_else(|| categories::classify(req.file_name.as_deref().unwrap_or("")));
-            remember = Some((category, dir.clone()));
+            // The dialog showed the folder with the site levels; remember the category folder.
+            let mut dir = dir.clone();
+            if let Some(rel) = b.site_subpath(&req)
+                && dir.ends_with(&rel)
+            {
+                for _ in rel.components() {
+                    dir.pop();
+                }
+            }
+            remember = Some((category, dir));
         }
         let url = req.url.clone();
         match b.add_request(req) {
@@ -878,6 +978,7 @@ mod tests {
         requests: Mutex<Vec<AddRequest>>,
         settings: Mutex<Option<Settings>>,
         removed: Mutex<Vec<(u64, bool)>>,
+        sites: Mutex<Vec<SiteView>>,
     }
 
     impl Backend for Mock {
@@ -950,6 +1051,44 @@ mod tests {
         }
         fn open_logs(&self) -> Result<(), String> {
             Ok(())
+        }
+        fn sites(&self) -> Vec<SiteView> {
+            self.sites.lock().unwrap().clone()
+        }
+        fn set_site(
+            &self,
+            domain: &str,
+            group: Option<SiteGroup>,
+            folder: Option<String>,
+        ) -> Result<(), String> {
+            if domain.is_empty() {
+                return Err("domain is empty".into());
+            }
+            let mut list = self.sites.lock().unwrap();
+            list.retain(|s| s.domain != domain);
+            list.push(SiteView {
+                domain: domain.into(),
+                group: group.unwrap_or(SiteGroup::Other),
+                origin: if group.is_some() { "you" } else { "auto" },
+                folder: folder.clone().unwrap_or_else(|| domain.into()),
+                user_group: group,
+                user_folder: folder,
+            });
+            Ok(())
+        }
+        fn reset_site(&self, domain: &str) {
+            self.sites.lock().unwrap().retain(|s| s.domain != domain);
+        }
+        fn site_subpath(&self, req: &AddRequest) -> Option<PathBuf> {
+            if self.settings().site_folders == SiteFolders::Off {
+                return None;
+            }
+            req.referer
+                .as_ref()
+                .map(|_| PathBuf::from("University/sharif.edu"))
+        }
+        fn ai_available(&self) -> bool {
+            true
         }
     }
 
@@ -1596,6 +1735,113 @@ mod tests {
         body["category_dirs"] = json!({"bogus": "/x"});
         assert_eq!(post(&c, "/api/settings", body).status, 400);
         assert_eq!(post(&c, "/api/open_logs", json!({})).status, 200);
+    }
+
+    #[test]
+    fn site_settings_parse_and_keep_their_value_when_left_out() {
+        let c = ctx();
+        let mut body: Value = serde_json::from_str(&settings_body(3, 8)).unwrap();
+        body["site_folders"] = json!("group_and_site");
+        body["ai_site_groups"] = json!(false);
+        let r = post(&c, "/api/settings", body);
+        assert_eq!(r.status, 200);
+        let v = body_of(&r);
+        assert_eq!(v["settings"]["site_folders"], "group_and_site");
+        assert_eq!(v["settings"]["ai_site_groups"], false);
+        // Leaving them out keeps the stored values.
+        let r = call(
+            &c,
+            "POST",
+            "/api/settings",
+            Some("tok123"),
+            &settings_body(3, 8),
+        );
+        let v = body_of(&r);
+        assert_eq!(v["settings"]["site_folders"], "group_and_site");
+        assert_eq!(v["settings"]["ai_site_groups"], false);
+        let mut bad: Value = serde_json::from_str(&settings_body(3, 8)).unwrap();
+        bad["site_folders"] = json!("everywhere");
+        assert_eq!(post(&c, "/api/settings", bad).status, 400);
+        // Default is off.
+        assert_eq!(settings_json(&Settings::default())["site_folders"], "off");
+    }
+
+    #[test]
+    fn sites_table_api() {
+        let c = ctx();
+        assert_eq!(call(&c, "GET", "/api/sites", None, "").status, 401);
+        let v = body_of(&call(&c, "GET", "/api/sites", Some("tok123"), ""));
+        assert!(v["sites"].as_array().unwrap().is_empty());
+
+        let r = post(
+            &c,
+            "/api/sites",
+            json!({"domain": "sharif.edu", "group": "software", "folder": "Sharif"}),
+        );
+        assert_eq!(r.status, 200);
+        let row = &body_of(&r)["sites"][0];
+        assert_eq!(row["domain"], "sharif.edu");
+        assert_eq!(row["group"], "software");
+        assert_eq!(row["origin"], "you");
+        assert_eq!(row["folder"], "Sharif");
+        assert_eq!(row["user_folder"], "Sharif");
+        assert_eq!(
+            post(
+                &c,
+                "/api/sites",
+                json!({"domain": "a.com", "group": "nope"})
+            )
+            .status,
+            400
+        );
+        assert_eq!(post(&c, "/api/sites", json!({"group": "news"})).status, 400);
+
+        let r = post(&c, "/api/sites_reset", json!({"domain": "sharif.edu"}));
+        assert!(body_of(&r)["sites"].as_array().unwrap().is_empty());
+        assert_eq!(post(&c, "/api/sites_reset", json!({})).status, 400);
+
+        let v = body_of(&call(&c, "GET", "/api/ai_status", Some("tok123"), ""));
+        assert_eq!(v["available"], true);
+    }
+
+    #[test]
+    fn pending_items_carry_the_site_levels_and_remember_strips_them() {
+        let c = ctx();
+        c.backend.set_settings(Settings {
+            site_folders: SiteFolders::GroupAndSite,
+            ..Settings::default()
+        });
+        post(
+            &c,
+            "/api/add_request",
+            json!({"items": [{"url": "https://cdn.test/a.pdf", "referer": "https://sharif.edu/x",
+                              "page_title": "Course page"}]}),
+        );
+        let st = state(&c);
+        assert_eq!(
+            st["pending"][0]["items"][0]["site_rel"],
+            "University/sharif.edu"
+        );
+        // The page title stays with the request but is not shown back to the UI.
+        assert!(!st.to_string().contains("Course page"));
+        let pid = st["pending"][0]["id"].as_u64().unwrap();
+        post(
+            &c,
+            "/api/confirm",
+            json!({"pending_id": pid, "remember_dir": true,
+                   "items": [{"index": 0, "category": "documents",
+                              "dir": "/Volumes/D/Documents/University/sharif.edu"}]}),
+        );
+        let got = c.backend.requests.lock().unwrap().clone();
+        assert_eq!(got[0].page_title.as_deref(), Some("Course page"));
+        assert_eq!(
+            got[0].dir,
+            Some(PathBuf::from("/Volumes/D/Documents/University/sharif.edu"))
+        );
+        assert_eq!(
+            c.backend.settings().category_dirs.get(&Category::Documents),
+            Some(&PathBuf::from("/Volumes/D/Documents"))
+        );
     }
 
     #[test]

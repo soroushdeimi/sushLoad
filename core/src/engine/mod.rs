@@ -12,15 +12,19 @@ mod state;
 mod util;
 
 use crate::categories;
-use crate::model::{AddRequest, DownloadId, DownloadView, Event, ProbeInfo, Settings, Status};
+use crate::model::{
+    AddRequest, DownloadId, DownloadView, Event, ProbeInfo, Settings, SiteFolders, Status,
+};
 use crate::redact::{redact_proxy, redact_url};
+use crate::sites::{self, SiteEntry, SiteGroup, SiteView};
+use crate::sites_ai::{self, SiteQuery};
 use client::{Net, RequestContext};
 use ratelimit::RateLimiter;
 use state::{DownloadRecord, StateFile};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, watch};
 
 pub use util::sanitize_file_name;
@@ -55,6 +59,8 @@ pub(crate) struct InnerState {
     pub next_id: u64,
     pub settings: Settings,
     pub downloads: Vec<Entry>,
+    /// Domains seen by the site folders, with the user's choices and cached AI answers.
+    pub sites: HashMap<String, SiteEntry>,
 }
 
 impl InnerState {
@@ -77,6 +83,7 @@ impl InnerState {
                 .iter()
                 .map(|entry| entry.record.clone())
                 .collect(),
+            sites: self.sites.clone(),
         }
     }
 }
@@ -106,6 +113,20 @@ pub(crate) struct Inner {
     /// Set by the engine thread once its runtime exists; used to run probes.
     handle: std::sync::OnceLock<tokio::runtime::Handle>,
     events: Mutex<Option<EventHandler>>,
+    /// Test/override path of the AI helper; normally it is located on demand.
+    ai_helper: Mutex<Option<PathBuf>>,
+    /// Domains the AI was asked about (or failed on) during this run: never asked twice.
+    ai_asked: Mutex<HashSet<String>>,
+    /// Result of the helper's `--check`, remembered once positive.
+    ai_ok: Mutex<bool>,
+}
+
+/// What `Inner::placed_dir` needs to know about the download to pick its site folder.
+pub(crate) struct SiteCtx<'a> {
+    pub url: &'a str,
+    pub referer: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub file_name: &'a str,
 }
 
 /// The client new downloads use, or why none can be built from the current proxy settings.
@@ -175,6 +196,139 @@ impl Inner {
     }
 }
 
+/// Most domains remembered; beyond that new ones are filed but not recorded.
+const MAX_SITES: usize = 5000;
+
+impl Inner {
+    /// Folder a new file of `category` goes to when the dialog didn't pick one: the category
+    /// folder, plus the site levels when site folders are on. With `record`, a first-seen
+    /// domain is remembered (one log line) and, if it is unknown, the AI is asked in the
+    /// background; until it answers the group is `Other`.
+    pub(crate) fn placed_dir(
+        self: &Arc<Self>,
+        settings: &Settings,
+        category: crate::model::Category,
+        site: &SiteCtx<'_>,
+        record: bool,
+    ) -> PathBuf {
+        if settings.site_folders == SiteFolders::Off {
+            return categories::dir_for(settings, category);
+        }
+        let Some(domain) = sites::site_domain(site.url, site.referer) else {
+            return categories::dir_for(settings, category);
+        };
+        let (group, source, folder, fresh, ask_ai) = {
+            let mut state = lock(&self.state);
+            let fresh = record && !state.sites.contains_key(&domain);
+            if fresh && state.sites.len() < MAX_SITES {
+                state.sites.insert(domain.clone(), SiteEntry::default());
+            }
+            let entry = state.sites.get(&domain);
+            let (group, source) = sites::decide(&domain, entry);
+            let folder = sites::folder_name(&domain, entry);
+            let ask_ai = record && sites::wants_ai(settings, &domain, entry);
+            (group, source, folder, fresh, ask_ai)
+        };
+        if fresh {
+            log::info!(
+                target: "engine",
+                "site: {domain} \u{2192} {} ({})",
+                group.label(),
+                source.describe()
+            );
+            self.persist();
+        } else if record {
+            log::debug!(
+                target: "engine",
+                "site: {domain} \u{2192} {} (cached, {})",
+                group.label(),
+                source.describe()
+            );
+        }
+        if ask_ai {
+            let path = reqwest::Url::parse(site.url)
+                .map(|u| u.path().to_string())
+                .unwrap_or_default();
+            self.ask_ai(
+                domain,
+                SiteQuery {
+                    domain: String::new(),
+                    page_title: site.title.map(|t| t.chars().take(200).collect()),
+                    url_path: path.chars().take(200).collect(),
+                    file_name: site.file_name.chars().take(120).collect(),
+                },
+            );
+        }
+        sites::site_dir(settings, category, group, &folder)
+    }
+
+    /// Asks the helper about `domain` on a background thread, once per domain and run. The
+    /// answer (or "unsure") is cached in the state file; failures are only logged.
+    fn ask_ai(self: &Arc<Self>, domain: String, mut query: SiteQuery) {
+        if !lock(&self.ai_asked).insert(domain.clone()) {
+            return;
+        }
+        query.domain = domain.clone();
+        let inner = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("sushload-site-ai".to_string())
+            .spawn(move || {
+                let Some(helper) = inner.ai_helper_path() else {
+                    log::debug!(target: "engine", "site: {domain}: no AI helper installed");
+                    return;
+                };
+                if !inner.ai_available(&helper) {
+                    log::info!(target: "engine", "site: {domain}: AI helper unavailable, using rules only");
+                    return;
+                }
+                log::debug!(
+                    target: "engine",
+                    "site: {domain}: asking the on-device model (title: {:?})",
+                    query.page_title.as_deref().unwrap_or("").chars().take(80).collect::<String>()
+                );
+                let started = Instant::now();
+                match sites_ai::classify(&helper, &query) {
+                    Ok(choice) => {
+                        {
+                            let mut state = lock(&inner.state);
+                            let entry = state.sites.entry(domain.clone()).or_default();
+                            entry.ai_asked = true;
+                            entry.ai = choice;
+                        }
+                        inner.persist();
+                        log::info!(
+                            target: "engine",
+                            "site: {domain} \u{2192} {} (ai, {} ms)",
+                            choice.map_or("unsure", SiteGroup::label),
+                            started.elapsed().as_millis()
+                        );
+                    }
+                    Err(error) => {
+                        log::warn!(target: "engine", "site: {domain}: AI failed: {error}");
+                    }
+                }
+            });
+        if let Err(error) = spawned {
+            log::warn!(target: "engine", "site: cannot start the AI thread: {error}");
+        }
+    }
+
+    fn ai_helper_path(&self) -> Option<PathBuf> {
+        lock(&self.ai_helper)
+            .clone()
+            .or_else(sites_ai::locate_helper)
+    }
+
+    fn ai_available(&self, helper: &std::path::Path) -> bool {
+        if *lock(&self.ai_ok) {
+            return true;
+        }
+        let ok = sites_ai::is_available(helper);
+        *lock(&self.ai_ok) = ok;
+        ok
+    }
+}
+
 /// Handle to the download engine. Cheap to clone; all methods are non-blocking and callable
 /// from the UI (main) thread. The engine runs its own tokio runtime on background threads.
 #[derive(Clone)]
@@ -237,6 +391,7 @@ impl Engine {
                         cancel: None,
                     })
                     .collect(),
+                sites: file.sites,
             }),
             limiter: Arc::new(RateLimiter::new(speed_limit)),
             net: Mutex::new(net),
@@ -244,6 +399,9 @@ impl Engine {
             save_tx,
             handle: std::sync::OnceLock::new(),
             events: Mutex::new(None),
+            ai_helper: Mutex::new(None),
+            ai_asked: Mutex::new(HashSet::new()),
+            ai_ok: Mutex::new(false),
         });
         log::info!(
             target: "engine",
@@ -313,10 +471,19 @@ impl Engine {
             .category
             .unwrap_or_else(|| categories::classify(&file_name));
         let settings = { lock(&self.inner.state).settings.clone() };
-        let dir = request
-            .dir
-            .clone()
-            .unwrap_or_else(|| categories::dir_for(&settings, category));
+        let dir = request.dir.clone().unwrap_or_else(|| {
+            self.inner.placed_dir(
+                &settings,
+                category,
+                &SiteCtx {
+                    url: &prepared.url,
+                    referer: prepared.referer.as_deref(),
+                    title: request.page_title.as_deref(),
+                    file_name: &file_name,
+                },
+                true,
+            )
+        });
         let path = dir.join(&file_name);
         let status = if request.start_paused {
             Status::Paused
@@ -430,10 +597,19 @@ impl Engine {
         let category = request
             .category
             .unwrap_or_else(|| categories::classify(&file_name));
-        let dir = request
-            .dir
-            .clone()
-            .unwrap_or_else(|| categories::dir_for(&settings, category));
+        let dir = request.dir.clone().unwrap_or_else(|| {
+            self.inner.placed_dir(
+                &settings,
+                category,
+                &SiteCtx {
+                    url: &prepared.url,
+                    referer: prepared.referer.as_deref(),
+                    title: request.page_title.as_deref(),
+                    file_name: &file_name,
+                },
+                true,
+            )
+        });
         let exists = categories::name_taken(&dir, &file_name);
         log::info!(
             target: "engine",
@@ -595,6 +771,114 @@ impl Engine {
             .any(|entry| entry.record.status.is_active())
     }
 
+    /// Every domain seen by the site folders, with its effective group and folder.
+    pub fn sites(&self) -> Vec<SiteView> {
+        let state = lock(&self.inner.state);
+        let mut list: Vec<SiteView> = state
+            .sites
+            .iter()
+            .map(|(domain, entry)| {
+                let (group, source) = sites::decide(domain, Some(entry));
+                SiteView {
+                    domain: domain.clone(),
+                    group,
+                    origin: source.badge(),
+                    folder: sites::folder_name(domain, Some(entry)),
+                    user_group: entry.user_group,
+                    user_folder: entry.user_folder.clone(),
+                }
+            })
+            .collect();
+        list.sort_by(|a, b| a.domain.cmp(&b.domain));
+        list
+    }
+
+    /// Sets (or with `None` clears) the user's group and folder name for a domain. Applies to
+    /// new downloads only.
+    pub fn set_site(
+        &self,
+        domain: &str,
+        group: Option<SiteGroup>,
+        folder: Option<String>,
+    ) -> Result<(), String> {
+        let domain = domain.trim().to_ascii_lowercase();
+        if domain.is_empty() || domain.len() > 253 {
+            return Err("domain is empty".to_string());
+        }
+        let folder = folder
+            .map(|f| sites::sanitize_folder(&f))
+            .filter(|f| !f.is_empty() && *f != domain);
+        {
+            let mut state = lock(&self.inner.state);
+            if !state.sites.contains_key(&domain) && state.sites.len() >= MAX_SITES {
+                return Err("too many sites".to_string());
+            }
+            let entry = state.sites.entry(domain.clone()).or_default();
+            entry.user_group = group;
+            entry.user_folder = folder.clone();
+        }
+        log::info!(
+            target: "engine",
+            "site: {domain} set by user: group={} folder={}",
+            group.map_or("auto", SiteGroup::label),
+            folder.as_deref().unwrap_or("(domain)")
+        );
+        self.inner.persist();
+        Ok(())
+    }
+
+    /// Forgets the user's group and folder name for a domain (back to automatic).
+    pub fn reset_site(&self, domain: &str) {
+        let domain = domain.trim().to_ascii_lowercase();
+        let changed = {
+            let mut state = lock(&self.inner.state);
+            match state.sites.get_mut(&domain) {
+                Some(entry) => {
+                    let had = entry.user_group.is_some() || entry.user_folder.is_some();
+                    entry.user_group = None;
+                    entry.user_folder = None;
+                    had
+                }
+                None => false,
+            }
+        };
+        if changed {
+            log::info!(target: "engine", "site: {domain} reset to automatic");
+            self.inner.persist();
+        }
+    }
+
+    /// The site levels (`University/sharif.edu`) a download like this would get below its
+    /// category folder; None when site folders are off or the URL has no host. Changes
+    /// nothing, so the UI may call it freely.
+    pub fn site_subpath(&self, request: &AddRequest) -> Option<PathBuf> {
+        let state = lock(&self.inner.state);
+        if state.settings.site_folders == SiteFolders::Off {
+            return None;
+        }
+        let referer = request.referer.as_deref().filter(|r| !r.trim().is_empty());
+        let domain = sites::site_domain(&request.url, referer)?;
+        let entry = state.sites.get(&domain);
+        let (group, _) = sites::decide(&domain, entry);
+        let folder = sites::folder_name(&domain, entry);
+        sites::site_subpath(state.settings.site_folders, group, &folder)
+    }
+
+    /// Points the engine at a specific AI helper (tests); `None` goes back to searching.
+    pub fn set_ai_helper(&self, path: Option<PathBuf>) {
+        *lock(&self.inner.ai_helper) = path;
+        *lock(&self.inner.ai_ok) = false;
+    }
+
+    /// Whether the AI helper exists and says it can classify right now. Runs the helper's
+    /// `--check`, so it may take a moment; call it from a request thread, never the UI thread.
+    pub fn ai_available(&self) -> bool {
+        match self.inner.ai_helper_path() {
+            Some(helper) => sites_ai::is_available(&helper),
+            None => false,
+        }
+    }
+
     pub fn settings(&self) -> Settings {
         lock(&self.inner.state).settings.clone()
     }
@@ -661,6 +945,12 @@ fn log_settings_change(old: &Settings, new: &Settings) {
     }
     if old.notify_on_complete != new.notify_on_complete {
         changes.push(format!("notify_on_complete={}", new.notify_on_complete));
+    }
+    if old.site_folders != new.site_folders {
+        changes.push(format!("site_folders={}", new.site_folders.id()));
+    }
+    if old.ai_site_groups != new.ai_site_groups {
+        changes.push(format!("ai_site_groups={}", new.ai_site_groups));
     }
     if old.category_dirs != new.category_dirs {
         let mut dirs: Vec<String> = new

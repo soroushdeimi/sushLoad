@@ -201,3 +201,13 @@ select.field { padding-inline-end: 6px; }
 .frow.col { flex-direction: column; align-items: stretch; gap: 8px; }
 .catdirs { min-width: 0; }
 .catdir > span:first-child { width: 90px; flex: none; }
+
+.sites { display: flex; flex-direction: column; gap: 6px; align-items: stretch; min-width: 0; width: 100%; }
+.site { display: flex; align-items: center; gap: 8px; }
+.site .mono { width: 170px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site select.field { width: 150px; flex: none; }
+.site input.field { flex: 1; min-width: 80px; }
+.site .badge { width: 52px; flex: none; text-align: center; font-size: 11px; color: var(--muted); }
+.site .badge.you { color: var(--accent); }
+.site .badge.ai { color: var(--ok); }
+.sites.nogroup .site select.field { visibility: hidden; }

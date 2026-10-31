@@ -77,7 +77,7 @@ $('go').addEventListener('click', async () => {
   const cache = new Map();
   const items = [];
   for (const r of chosen) {
-    items.push(await buildItem({ url: r.url, referer: data.page, incognito: data.incognito, cache }));
+    items.push(await buildItem({ url: r.url, referer: data.page, pageTitle: data.title, incognito: data.incognito, cache }));
   }
   const res = await handover(items);
   const m = $('msg');

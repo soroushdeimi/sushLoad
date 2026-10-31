@@ -237,6 +237,7 @@ async fn run_download(
                 dir: record.dir.clone(),
                 overwrite: record.overwrite,
                 category: record.category_override,
+                referer: record.referer.clone(),
             },
             RequestContext::new(
                 &record.url,
@@ -282,10 +283,19 @@ async fn run_download(
         let category = placement
             .category
             .unwrap_or_else(|| categories::classify(&name));
-        let dir = placement
-            .dir
-            .clone()
-            .unwrap_or_else(|| categories::dir_for(&settings, category));
+        let dir = placement.dir.clone().unwrap_or_else(|| {
+            inner.placed_dir(
+                &settings,
+                category,
+                &super::SiteCtx {
+                    url: &url,
+                    referer: placement.referer.as_deref(),
+                    title: None,
+                    file_name: &name,
+                },
+                false,
+            )
+        });
         std::fs::create_dir_all(&dir)
             .map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
         let path = if placement.overwrite {
@@ -393,6 +403,7 @@ struct Placement {
     dir: Option<PathBuf>,
     overwrite: bool,
     category: Option<crate::model::Category>,
+    referer: Option<String>,
 }
 
 fn differs(old: &Option<String>, new: &Option<String>) -> bool {

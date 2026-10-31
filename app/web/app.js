@@ -66,6 +66,15 @@ const I18N = {
     confirmSettingHint: 'Shows “Download File Info” for new downloads: name, category and folder.',
     notifySetting: 'Notify when a download finishes', notifySettingHint: 'A macOS notification when a download completes or fails.',
     catFolders: 'Remembered folders', catFoldersNone: 'None yet. Tick “Remember this folder” in the download dialog.',
+    siteFolders: 'Site folders', siteFoldersHint: 'Also file downloads by the site they came from, e.g. Documents/University/sharif.edu.',
+    siteOff: 'Off', siteSite: 'By site', siteGroupSite: 'By group and site',
+    siteAi: 'Use Apple Intelligence for unknown sites', siteAiHint: 'Asked once per site, on this Mac only. Known sites never need it.',
+    siteAiMissing: 'Not available: the tgsort-ai helper is missing or Apple Intelligence is off.',
+    siteTable: 'Sites', sitesNone: 'None yet. Sites appear here as you download from them. Changes apply to new downloads.',
+    siteAuto: 'auto', siteYou: 'you', siteAiBadge: 'AI',
+    grp_university: 'University', grp_government: 'Government', grp_software: 'Software', grp_cloud_storage: 'Cloud storage',
+    grp_video: 'Video', grp_music: 'Music', grp_news: 'News', grp_shopping: 'Shopping', grp_social: 'Social',
+    grp_books_papers: 'Books & papers', grp_other: 'Other',
     reset: 'Reset', logs: 'Log', openLogs: 'Open log folder', logsHint: 'sushload.log, rotated at 1 MiB.',
   },
   fa: {
@@ -112,6 +121,15 @@ const I18N = {
     confirmSettingHint: 'برای دانلودهای تازه پنجرهٔ «اطلاعات فایل دانلود» با نام، دسته و پوشه نشان داده می‌شود.',
     notifySetting: 'اعلان پایان دانلود', notifySettingHint: 'هنگام کامل شدن یا ناموفق ماندن دانلود، یک اعلان macOS نشان داده می‌شود.',
     catFolders: 'پوشه‌های ذخیره‌شده', catFoldersNone: 'هنوز چیزی نیست. در پنجرهٔ دانلود «این پوشه را به خاطر بسپار» را بزنید.',
+    siteFolders: 'پوشه‌بندی بر اساس سایت', siteFoldersHint: 'دانلودها را بر اساس سایتی که از آن آمده‌اند هم جدا می‌کند، مثلاً Documents/University/sharif.edu.',
+    siteOff: 'خاموش', siteSite: 'بر اساس سایت', siteGroupSite: 'بر اساس گروه و سایت',
+    siteAi: 'استفاده از Apple Intelligence برای سایت‌های ناشناس', siteAiHint: 'برای هر سایت فقط یک بار و فقط روی همین مک پرسیده می‌شود. سایت‌های شناخته‌شده به آن نیاز ندارند.',
+    siteAiMissing: 'در دسترس نیست: ابزار tgsort-ai نصب نیست یا Apple Intelligence خاموش است.',
+    siteTable: 'سایت‌ها', sitesNone: 'هنوز چیزی نیست. با دانلود از هر سایت، همین‌جا اضافه می‌شود. تغییرات برای دانلودهای تازه اعمال می‌شود.',
+    siteAuto: 'خودکار', siteYou: 'شما', siteAiBadge: 'هوش مصنوعی',
+    grp_university: 'دانشگاه', grp_government: 'دولتی', grp_software: 'نرم‌افزار', grp_cloud_storage: 'فضای ابری',
+    grp_video: 'ویدیو', grp_music: 'موسیقی', grp_news: 'اخبار', grp_shopping: 'خرید', grp_social: 'شبکه اجتماعی',
+    grp_books_papers: 'کتاب و مقاله', grp_other: 'سایر',
     reset: 'بازنشانی', logs: 'گزارش', openLogs: 'باز کردن پوشهٔ گزارش', logsHint: 'sushload.log، با چرخش در ۱ مگابایت.',
   },
 };
@@ -417,7 +435,7 @@ function setView(v) {
   $('#page-downloads').hidden = settings;
   $('#page-settings').hidden = !settings;
   $('#filter').hidden = settings;
-  if (settings) fillSettings(true);
+  if (settings) { fillSettings(true); loadSites(); loadAiStatus(); }
   render();
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('.nav-item'); if (b) setView(b.dataset.view); });
@@ -685,6 +703,7 @@ function nameOfUrl(u) {
   catch { return 'download'; }
 }
 const midTrunc = (s, n) => s.length <= n ? s : s.slice(0, Math.ceil(n * 0.6)) + '…' + s.slice(s.length - Math.floor(n * 0.4) + 1);
+const withSite = (base, rel) => rel ? base.replace(/\/$/, '') + '/' + rel : base;
 const defaultDir = cat => (state.default_dirs && state.default_dirs[cat]) || (state.settings ? state.settings.download_dir : '');
 
 let pendingBusy = false, pendingDone = 0;
@@ -764,7 +783,7 @@ function confirmDialog(p, pos, total) {
       for (const c of CATS) { const o = el('option', null, t(c)); o.value = c; catSel.append(o); }
       catSel.value = catOfName(nameInput.value);
       row(t('categoryL'), catSel);
-      dir = defaultDir(catSel.value);
+      dir = withSite(defaultDir(catSel.value), p.items[0].site_rel);
     } else {
       const list = el('div', 'fi-list fi-sub');
       p.items.forEach(it => {
@@ -836,10 +855,10 @@ function confirmDialog(p, pos, total) {
     };
 
     if (!batch) {
-      catSel.onchange = () => { catChosen = true; if (!dirChosen) dir = defaultDir(catSel.value); paintDir(); recheck(); };
+      catSel.onchange = () => { catChosen = true; if (!dirChosen) dir = withSite(defaultDir(catSel.value), p.items[0].site_rel); paintDir(); recheck(); };
       nameInput.onchange = () => {
         if (!catChosen) catSel.value = catOfName(nameInput.value);
-        if (!dirChosen) dir = defaultDir(catSel.value);
+        if (!dirChosen) dir = withSite(defaultDir(catSel.value), p.items[0].site_rel);
         paintDir(); recheck();
       };
       // One quick look at the link: size, resumability, name from the server, existing file.
@@ -930,7 +949,7 @@ function buildProxy() {
 
 /* ---------- settings page ---------- */
 const S = {
-  confirm: $('#sConfirm'), notify: $('#sNotify'),
+  confirm: $('#sConfirm'), notify: $('#sNotify'), siteMode: $('#sSiteMode'), siteAi: $('#sSiteAi'),
   dir: $('#sDir'), sort: $('#sSort'), conc: $('#sConc'), conns: $('#sConns'),
   mode: $('#sLimitMode'), val: $('#sLimitVal'), unit: $('#sLimitUnit'), lang: $('#sLang'),
 };
@@ -943,6 +962,11 @@ function fillSettings(force) {
   S.sort.setAttribute('aria-checked', String(!!s.sort_into_categories));
   S.confirm.setAttribute('aria-checked', String(s.confirm_new_downloads !== false));
   S.notify.setAttribute('aria-checked', String(s.notify_on_complete !== false));
+  S.siteMode.value = s.site_folders || 'off';
+  S.siteAi.setAttribute('aria-checked', String(s.ai_site_groups !== false));
+  $('#siteMore').hidden = S.siteMode.value === 'off';
+  $('#siteAiRow').hidden = S.siteMode.value !== 'group_and_site';
+  paintSites();
   paintCatDirs(s.category_dirs || {});
   S.conc.value = s.max_concurrent;
   S.conns.value = s.connections;
@@ -980,6 +1004,58 @@ function paintCatDirs(map) {
     box.append(r);
   }
 }
+/* ---------- site folders: the Sites table ---------- */
+let sitesList = [], aiChecked = false;
+async function loadSites() {
+  try { sitesList = (await api('/api/sites')).sites || []; } catch { sitesList = []; }
+  paintSites();
+}
+async function loadAiStatus() {
+  if (aiChecked) return;
+  aiChecked = true;
+  try {
+    const r = await api('/api/ai_status');
+    $('#siteAiNote').hidden = !!r.available;
+    S.siteAi.disabled = !r.available;
+    S.siteAi.style.opacity = r.available ? '' : '0.4';
+  } catch { aiChecked = false; }
+}
+async function saveSite(domain, group, folder) {
+  try { sitesList = (await api('/api/sites', { domain, group: group || '', folder: folder || '' })).sites || []; }
+  catch (e) { toast(e.message); }
+  paintSites(true);
+}
+function paintSites(force) {
+  const box = $('#sitesBox');
+  const mode = state.settings ? state.settings.site_folders : 'off';
+  const sig = JSON.stringify(sitesList) + mode + lang;
+  if (!force && box.dataset.sig === sig) return;
+  if (!force && box.contains(document.activeElement) && isEditable(document.activeElement)) return;
+  box.dataset.sig = sig;
+  box.innerHTML = '';
+  box.classList.toggle('nogroup', mode !== 'group_and_site');
+  $('#sitesNone').hidden = sitesList.length > 0;
+  for (const s of sitesList) {
+    const r = el('div', 'site');
+    const name = el('span', 'mono', s.domain); name.title = s.domain;
+    const sel = el('select', 'field');
+    for (const g of GROUPS) { const o = el('option', null, t('grp_' + g)); o.value = g; sel.append(o); }
+    sel.value = s.group;
+    sel.onchange = () => saveSite(s.domain, sel.value, s.user_folder);
+    const folder = el('input', 'field'); folder.dir = 'ltr'; folder.spellcheck = false; folder.value = s.folder;
+    folder.onchange = () => saveSite(s.domain, s.user_group, folder.value.trim());
+    const badge = el('span', 'badge ' + s.origin, t(s.origin === 'you' ? 'siteYou' : s.origin === 'ai' ? 'siteAiBadge' : 'siteAuto'));
+    const reset = el('button', 'btn', t('reset'));
+    reset.disabled = !s.user_group && !s.user_folder;
+    reset.onclick = async () => {
+      try { sitesList = (await api('/api/sites_reset', { domain: s.domain })).sites || []; } catch (e) { toast(e.message); }
+      paintSites(true);
+    };
+    r.append(name, sel, folder, badge, reset);
+    box.append(r);
+  }
+}
+const GROUPS = ['university', 'government', 'software', 'cloud_storage', 'video', 'music', 'news', 'shopping', 'social', 'books_papers', 'other'];
 function renderSettingsIfIdle() { if (view === 'settings') fillSettings(false); }
 
 async function saveSettings(categoryDirs) {
@@ -996,6 +1072,8 @@ async function saveSettings(categoryDirs) {
     proxy_url: $('#pMode').value === 'custom' ? buildProxy() : (state.settings && state.settings.proxy_url) || '',
     confirm_new_downloads: S.confirm.getAttribute('aria-checked') === 'true',
     notify_on_complete: S.notify.getAttribute('aria-checked') === 'true',
+    site_folders: S.siteMode.value,
+    ai_site_groups: S.siteAi.getAttribute('aria-checked') === 'true',
     category_dirs: (categoryDirs && typeof categoryDirs === 'object' && !(categoryDirs instanceof Event))
       ? categoryDirs : ((state.settings && state.settings.category_dirs) || {}),
   };
@@ -1018,13 +1096,13 @@ async function saveSettings(categoryDirs) {
   refresh();
 }
 [S.dir, S.conc, S.conns, S.val].forEach(i => i.addEventListener('change', saveSettings));
-[S.mode, S.unit].forEach(i => i.addEventListener('change', saveSettings));
+[S.mode, S.unit, S.siteMode].forEach(i => i.addEventListener('change', saveSettings));
 S.dir.addEventListener('keydown', e => { if (e.key === 'Enter') S.dir.blur(); });
 S.sort.addEventListener('click', () => {
   S.sort.setAttribute('aria-checked', String(S.sort.getAttribute('aria-checked') !== 'true'));
   saveSettings();
 });
-for (const sw of [S.confirm, S.notify]) {
+for (const sw of [S.confirm, S.notify, S.siteAi]) {
   sw.addEventListener('click', () => {
     sw.setAttribute('aria-checked', String(sw.getAttribute('aria-checked') !== 'true'));
     saveSettings();

@@ -172,6 +172,39 @@ pub fn validate_proxy_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// Whether downloads are also filed by the web site they came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiteFolders {
+    /// Category folders only.
+    #[default]
+    Off,
+    /// `<Category>/<site>/`
+    Site,
+    /// `<Category>/<Group>/<site>/`
+    GroupAndSite,
+}
+
+impl SiteFolders {
+    pub fn id(self) -> &'static str {
+        match self {
+            SiteFolders::Off => "off",
+            SiteFolders::Site => "site",
+            SiteFolders::GroupAndSite => "group_and_site",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<SiteFolders> {
+        [
+            SiteFolders::Off,
+            SiteFolders::Site,
+            SiteFolders::GroupAndSite,
+        ]
+        .into_iter()
+        .find(|m| m.id() == id)
+    }
+}
+
 /// User settings, persisted with the state. Changes apply live via `Engine::set_settings`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -195,6 +228,11 @@ pub struct Settings {
     pub category_dirs: HashMap<Category, PathBuf>,
     /// Tell the user (macOS notification) when a download finishes or fails.
     pub notify_on_complete: bool,
+    /// Also split folders by the site a file came from (below the category folder).
+    pub site_folders: SiteFolders,
+    /// Ask the on-device model (the `tgsort-ai` helper) to group sites the built-in rules
+    /// don't know. Only used with `SiteFolders::GroupAndSite`.
+    pub ai_site_groups: bool,
 }
 
 impl Default for Settings {
@@ -213,6 +251,8 @@ impl Default for Settings {
             confirm_new_downloads: true,
             category_dirs: HashMap::new(),
             notify_on_complete: true,
+            site_folders: SiteFolders::Off,
+            ai_site_groups: true,
         }
     }
 }
@@ -237,6 +277,9 @@ pub struct AddRequest {
     pub start_paused: bool,
     /// Replace an existing file of the same name instead of picking `name (1).ext`.
     pub overwrite: bool,
+    /// Title of the page the download started from. Only a hint for the optional on-device
+    /// site grouping; never stored, never logged in full.
+    pub page_title: Option<String>,
 }
 
 /// What `Engine::probe` learned about a URL with one `Range: bytes=0-0` request.

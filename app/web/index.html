@@ -153,6 +153,30 @@
           <div class="catdirs" id="catDirs"></div>
         </div>
         <div class="frow">
+          <div class="flabel"><div data-i18n="siteFolders">Site folders</div>
+            <div class="muted small" data-i18n="siteFoldersHint">Also file downloads by the site they came from, e.g. Documents/University/sharif.edu.</div></div>
+          <div class="fctl">
+            <select class="field" id="sSiteMode">
+              <option value="off" data-i18n="siteOff">Off</option>
+              <option value="site" data-i18n="siteSite">By site</option>
+              <option value="group_and_site" data-i18n="siteGroupSite">By group and site</option>
+            </select>
+          </div>
+        </div>
+        <div id="siteMore" hidden>
+          <div class="frow" id="siteAiRow">
+            <div class="flabel"><div data-i18n="siteAi">Use Apple Intelligence for unknown sites</div>
+              <div class="muted small" data-i18n="siteAiHint">Asked once per site, on this Mac only. Known sites never need it.</div>
+              <div class="muted small" id="siteAiNote" hidden data-i18n="siteAiMissing">Not available: the tgsort-ai helper is missing or Apple Intelligence is off.</div></div>
+            <div class="fctl"><button class="switch" id="sSiteAi" role="switch" aria-checked="true"><i></i></button></div>
+          </div>
+          <div class="frow col">
+            <div class="flabel"><div data-i18n="siteTable">Sites</div>
+              <div class="muted small" id="sitesNone" data-i18n="sitesNone">None yet. Sites appear here as you download from them. Changes apply to new downloads.</div></div>
+            <div class="sites" id="sitesBox"></div>
+          </div>
+        </div>
+        <div class="frow">
           <div class="flabel"><div data-i18n="maxConcurrent">Concurrent downloads</div></div>
           <div class="fctl"><input class="field num" id="sConc" type="number" min="1" max="10"></div>
         </div>

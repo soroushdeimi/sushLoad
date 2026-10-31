@@ -116,7 +116,7 @@ export async function cookieHeader(url, incognito) {
   } catch { return ''; }
 }
 
-export async function buildItem({ url, fileName, referer, incognito, cache }) {
+export async function buildItem({ url, fileName, referer, pageTitle, incognito, cache }) {
   let cookies = '';
   if (cache) {
     const key = hostOf(url);
@@ -127,6 +127,8 @@ export async function buildItem({ url, fileName, referer, incognito, cache }) {
     url,
     file_name: fileName || null,
     referer: referer || null,
+    // Only a hint for sushLoad's optional on-device site grouping.
+    page_title: pageTitle ? String(pageTitle).slice(0, 200) : null,
     cookies: cookies || null,
     user_agent: navigator.userAgent,
   };
