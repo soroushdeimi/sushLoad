@@ -1,11 +1,16 @@
 #!/bin/bash
 # Builds dist/sushLoad.app (ad-hoc signed) and dist/sushLoad.dmg.
+# SUSHLOAD_BIN=<path> bundles an already built binary (CI: the universal one) instead of building.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 export PATH="/opt/homebrew/bin:$PATH"
 
-cargo build --release -p sushload
+BIN="${SUSHLOAD_BIN:-}"
+if [ -z "$BIN" ]; then
+  cargo build --release -p sushload
+  BIN="$ROOT/target/release/sushload"
+fi
 
 DIST="$ROOT/dist"
 APP="$DIST/sushLoad.app"
@@ -14,27 +19,15 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 # Apple Silicon kills a binary overwritten in place, so it is always a fresh file.
 rm -f "$APP/Contents/MacOS/sushload"
-cp "$ROOT/target/release/sushload" "$APP/Contents/MacOS/sushload"
+cp "$BIN" "$APP/Contents/MacOS/sushload"
 chmod 755 "$APP/Contents/MacOS/sushload"
 
 VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)"
 VERSION="${VERSION:-0.1.0}"
 
-# Icon (best effort).
-ICON_KEY=""
-TMP="$(mktemp -d)"
-if python3 "$ROOT/scripts/make_icon.py" "$TMP/icon.png" 2>/dev/null; then
-  SET="$TMP/sushLoad.iconset"
-  mkdir -p "$SET"
-  for s in 16 32 128 256 512; do
-    sips -z $s $s "$TMP/icon.png" --out "$SET/icon_${s}x${s}.png" >/dev/null
-    sips -z $((s*2)) $((s*2)) "$TMP/icon.png" --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
-  done
-  if iconutil -c icns "$SET" -o "$APP/Contents/Resources/sushLoad.icns" 2>/dev/null; then
-    ICON_KEY="<key>CFBundleIconFile</key><string>sushLoad</string>"
-  fi
-fi
-rm -rf "$TMP"
+# Icon: assets/AppIcon.icns is generated from assets/logo.png by scripts/make_icon.py.
+cp "$ROOT/assets/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+ICON_KEY="<key>CFBundleIconFile</key><string>AppIcon</string>"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

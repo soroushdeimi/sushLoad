@@ -1,8 +1,8 @@
 mod common;
 use common::*;
-use sushload_core::Status;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use sushload_core::Status;
 
 const T20: Duration = Duration::from_secs(20);
 

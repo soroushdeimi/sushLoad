@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/AppIcon.png" width="128" alt="sushLoad icon"></p>
+
 # sushLoad
 
 A lightweight IDM-style download manager for macOS, written in Rust.
@@ -26,6 +28,11 @@ scripts/bundle.sh    # dist/sushLoad.app + dist/sushLoad.dmg (ad-hoc signed)
 scripts/install.sh   # copies to /Applications and links ~/.local/bin/sushload
 cargo test --workspace
 ```
+
+## Icon
+
+`assets/logo.png` is the artwork; `scripts/make_icon.py` (needs Pillow) turns it into
+`assets/AppIcon.png` / `AppIcon.icns` in the macOS rounded-square grid.
 
 ## Layout
 

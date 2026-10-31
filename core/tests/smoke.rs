@@ -1,7 +1,7 @@
 mod common;
 use common::*;
-use sushload_core::Status;
 use std::time::Duration;
+use sushload_core::Status;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn segmented_download_completes_with_exact_bytes() {

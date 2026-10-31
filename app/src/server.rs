@@ -2,11 +2,13 @@
 //! short-lived thread per request. Nothing runs while idle.
 
 use serde_json::{Value, json};
-use sushload_core::{DownloadId, DownloadView, Engine, ProxyMode, Settings, Status, validate_proxy_url};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+use sushload_core::{
+    DownloadId, DownloadView, Engine, ProxyMode, Settings, Status, validate_proxy_url,
+};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 const STYLE_CSS: &str = include_str!("../web/style.css");
@@ -81,7 +83,11 @@ impl Backend for Engine {
             return None;
         }
         // Drop a trailing slash (keep a lone "/").
-        Some(if s.len() > 1 { s.trim_end_matches('/').to_string() } else { s })
+        Some(if s.len() > 1 {
+            s.trim_end_matches('/').to_string()
+        } else {
+            s
+        })
     }
 }
 
@@ -110,11 +116,18 @@ fn err(status: u16, msg: &str) -> Response {
 }
 
 fn static_resp(ct: &'static str, body: &'static str) -> Response {
-    Response { status: 200, content_type: ct, body: body.as_bytes().to_vec() }
+    Response {
+        status: 200,
+        content_type: ct,
+        body: body.as_bytes().to_vec(),
+    }
 }
 
 fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
 }
 
 /// Constant-time-ish comparison; the token is local-only but there is no reason to leak.
@@ -122,7 +135,10 @@ fn tokens_equal(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 pub fn view_json(v: &DownloadView) -> Value {
@@ -163,7 +179,10 @@ fn settings_json(s: &Settings) -> Value {
 
 /// Parses and validates a settings object from the UI.
 pub fn parse_settings(v: &Value) -> Result<Settings, String> {
-    let dir = v.get("download_dir").and_then(Value::as_str).ok_or("download_dir missing")?;
+    let dir = v
+        .get("download_dir")
+        .and_then(Value::as_str)
+        .ok_or("download_dir missing")?;
     if dir.trim().is_empty() {
         return Err("download_dir is empty".into());
     }
@@ -175,15 +194,24 @@ pub fn parse_settings(v: &Value) -> Result<Settings, String> {
         .get("sort_into_categories")
         .and_then(Value::as_bool)
         .ok_or("sort_into_categories missing")?;
-    let mc = v.get("max_concurrent").and_then(Value::as_u64).ok_or("max_concurrent missing")?;
+    let mc = v
+        .get("max_concurrent")
+        .and_then(Value::as_u64)
+        .ok_or("max_concurrent missing")?;
     if !(1..=10).contains(&mc) {
         return Err("max_concurrent must be 1..=10".into());
     }
-    let conns = v.get("connections").and_then(Value::as_u64).ok_or("connections missing")?;
+    let conns = v
+        .get("connections")
+        .and_then(Value::as_u64)
+        .ok_or("connections missing")?;
     if !(1..=16).contains(&conns) {
         return Err("connections must be 1..=16".into());
     }
-    let limit = v.get("speed_limit").and_then(Value::as_u64).ok_or("speed_limit missing")?;
+    let limit = v
+        .get("speed_limit")
+        .and_then(Value::as_u64)
+        .ok_or("speed_limit missing")?;
     if limit > 1 << 40 {
         return Err("speed_limit too large".into());
     }
@@ -193,7 +221,12 @@ pub fn parse_settings(v: &Value) -> Result<Settings, String> {
         Some("custom") => ProxyMode::Custom,
         Some(other) => return Err(format!("unknown proxy_mode \"{other}\"")),
     };
-    let proxy_url = v.get("proxy_url").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let proxy_url = v
+        .get("proxy_url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if proxy_mode == ProxyMode::Custom {
         validate_proxy_url(&proxy_url)?;
     }
@@ -286,7 +319,13 @@ pub fn handle<B: Backend>(
             match path_only {
                 "/api/pause" => b.pause(id),
                 "/api/resume" => b.resume(id),
-                _ => b.remove(id, parsed.get("delete_file").and_then(Value::as_bool).unwrap_or(false)),
+                _ => b.remove(
+                    id,
+                    parsed
+                        .get("delete_file")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                ),
             }
             json_resp(200, json!({ "ok": true }))
         }
@@ -301,7 +340,10 @@ pub fn handle<B: Backend>(
         ("POST", "/api/settings") => match parse_settings(&parsed) {
             Ok(s) => {
                 b.set_settings(s);
-                json_resp(200, json!({ "ok": true, "settings": settings_json(&b.settings()) }))
+                json_resp(
+                    200,
+                    json!({ "ok": true, "settings": settings_json(&b.settings()) }),
+                )
             }
             Err(e) => err(400, &e),
         },
@@ -358,13 +400,19 @@ pub fn start(engine: Engine, preferred_port: u16) -> Result<RunningServer, Strin
         .to_ip()
         .map(|a| a.port())
         .ok_or("server has no IP address")?;
-    let ctx = Arc::new(Ctx { backend: engine, token: token.clone(), port });
+    let ctx = Arc::new(Ctx {
+        backend: engine,
+        token: token.clone(),
+        port,
+    });
     std::thread::Builder::new()
         .name("sushload-http".into())
         .spawn(move || {
             for req in server.incoming_requests() {
                 let ctx = ctx.clone();
-                let _ = std::thread::Builder::new().name("sushload-req".into()).spawn(move || serve_one(&ctx, req));
+                let _ = std::thread::Builder::new()
+                    .name("sushload-req".into())
+                    .spawn(move || serve_one(&ctx, req));
             }
         })
         .map_err(|e| e.to_string())?;
@@ -377,7 +425,12 @@ fn serve_one<B: Backend>(ctx: &Ctx<B>, mut req: tiny_http::Request) {
     let headers: Vec<(String, String)> = req
         .headers()
         .iter()
-        .map(|h| (h.field.as_str().as_str().to_string(), h.value.as_str().to_string()))
+        .map(|h| {
+            (
+                h.field.as_str().as_str().to_string(),
+                h.value.as_str().to_string(),
+            )
+        })
         .collect();
     let mut body = Vec::new();
     if req.body_length().is_some_and(|n| n > MAX_BODY) {
@@ -403,8 +456,8 @@ fn serve_one<B: Backend>(ctx: &Ctx<B>, mut req: tiny_http::Request) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sushload_core::{Category, Segment};
     use std::sync::Mutex;
+    use sushload_core::{Category, Segment};
 
     #[derive(Default)]
     struct Mock {
@@ -442,7 +495,11 @@ mod tests {
                 speed: 5,
                 eta_secs: Some(18),
                 connections: 2,
-                segments: vec![Segment { start: 0, end: 49, received: 10 }],
+                segments: vec![Segment {
+                    start: 0,
+                    end: 49,
+                    received: 10,
+                }],
                 resumable: true,
                 error: None,
                 added_at: 1,
@@ -464,7 +521,11 @@ mod tests {
     }
 
     fn ctx() -> Ctx<Mock> {
-        Ctx { backend: Mock::default(), token: "tok123".into(), port: 47815 }
+        Ctx {
+            backend: Mock::default(),
+            token: "tok123".into(),
+            port: 47815,
+        }
     }
 
     fn hdrs(token: Option<&str>, host: &str) -> Vec<(String, String)> {
@@ -489,7 +550,10 @@ mod tests {
     fn token_required() {
         let c = ctx();
         assert_eq!(call(&c, "GET", "/api/state", None, "").status, 401);
-        assert_eq!(call(&c, "GET", "/api/state", Some("wrong!"), "").status, 401);
+        assert_eq!(
+            call(&c, "GET", "/api/state", Some("wrong!"), "").status,
+            401
+        );
         assert_eq!(call(&c, "POST", "/api/pause_all", None, "").status, 401);
         let r = call(&c, "GET", "/api/state", Some("tok123"), "");
         assert_eq!(r.status, 200);
@@ -503,13 +567,31 @@ mod tests {
     #[test]
     fn foreign_host_rejected() {
         let c = ctx();
-        let r = handle(&c, "GET", "/api/state", &hdrs(Some("tok123"), "evil.example.com"), b"");
+        let r = handle(
+            &c,
+            "GET",
+            "/api/state",
+            &hdrs(Some("tok123"), "evil.example.com"),
+            b"",
+        );
         assert_eq!(r.status, 403);
         let r = handle(&c, "GET", "/", &hdrs(None, "evil.example.com:47815"), b"");
         assert_eq!(r.status, 403);
-        let r = handle(&c, "GET", "/api/state", &hdrs(Some("tok123"), "127.0.0.1:9999"), b"");
+        let r = handle(
+            &c,
+            "GET",
+            "/api/state",
+            &hdrs(Some("tok123"), "127.0.0.1:9999"),
+            b"",
+        );
         assert_eq!(r.status, 403);
-        let r = handle(&c, "GET", "/api/state", &hdrs(Some("tok123"), "localhost:47815"), b"");
+        let r = handle(
+            &c,
+            "GET",
+            "/api/state",
+            &hdrs(Some("tok123"), "localhost:47815"),
+            b"",
+        );
         assert_eq!(r.status, 200);
         assert_eq!(handle(&c, "GET", "/", &[], b"").status, 403);
     }
@@ -517,40 +599,81 @@ mod tests {
     #[test]
     fn add_two_urls_calls_engine_twice() {
         let c = ctx();
-        let body = json!({"urls": "http://a.test/1.zip\n\n  http://b.test/2.zip \nnot-a-url"}).to_string();
+        let body =
+            json!({"urls": "http://a.test/1.zip\n\n  http://b.test/2.zip \nnot-a-url"}).to_string();
         let r = call(&c, "POST", "/api/add", Some("tok123"), &body);
         assert_eq!(r.status, 200);
         let v: Value = serde_json::from_slice(&r.body).unwrap();
         assert_eq!(v["added"], 2);
         assert_eq!(v["errors"].as_array().unwrap().len(), 1);
-        assert_eq!(*c.backend.added.lock().unwrap(), vec!["http://a.test/1.zip", "http://b.test/2.zip"]);
+        assert_eq!(
+            *c.backend.added.lock().unwrap(),
+            vec!["http://a.test/1.zip", "http://b.test/2.zip"]
+        );
     }
 
     #[test]
     fn remove_passes_delete_flag() {
         let c = ctx();
-        call(&c, "POST", "/api/remove", Some("tok123"), r#"{"id":3,"delete_file":true}"#);
+        call(
+            &c,
+            "POST",
+            "/api/remove",
+            Some("tok123"),
+            r#"{"id":3,"delete_file":true}"#,
+        );
         call(&c, "POST", "/api/remove", Some("tok123"), r#"{"id":4}"#);
-        assert_eq!(*c.backend.removed.lock().unwrap(), vec![(3, true), (4, false)]);
-        assert_eq!(call(&c, "POST", "/api/remove", Some("tok123"), "{}").status, 400);
-        assert_eq!(call(&c, "POST", "/api/remove", Some("tok123"), "nope").status, 400);
+        assert_eq!(
+            *c.backend.removed.lock().unwrap(),
+            vec![(3, true), (4, false)]
+        );
+        assert_eq!(
+            call(&c, "POST", "/api/remove", Some("tok123"), "{}").status,
+            400
+        );
+        assert_eq!(
+            call(&c, "POST", "/api/remove", Some("tok123"), "nope").status,
+            400
+        );
     }
 
     #[test]
     fn settings_validation() {
         let c = ctx();
         for (mc, cn) in [(0, 8), (11, 8), (3, 0), (3, 17)] {
-            let r = call(&c, "POST", "/api/settings", Some("tok123"), &settings_body(mc, cn));
+            let r = call(
+                &c,
+                "POST",
+                "/api/settings",
+                Some("tok123"),
+                &settings_body(mc, cn),
+            );
             assert_eq!(r.status, 400, "mc={mc} conns={cn}");
         }
         assert!(c.backend.settings.lock().unwrap().is_none());
-        let r = call(&c, "POST", "/api/settings", Some("tok123"), &settings_body(10, 16));
+        let r = call(
+            &c,
+            "POST",
+            "/api/settings",
+            Some("tok123"),
+            &settings_body(10, 16),
+        );
         assert_eq!(r.status, 200);
         let s = c.backend.settings.lock().unwrap().clone().unwrap();
         assert_eq!((s.max_concurrent, s.connections), (10, 16));
         let rel = json!({"download_dir": "rel/dir", "sort_into_categories": true,
                          "max_concurrent": 3, "connections": 8, "speed_limit": 0});
-        assert_eq!(call(&c, "POST", "/api/settings", Some("tok123"), &rel.to_string()).status, 400);
+        assert_eq!(
+            call(
+                &c,
+                "POST",
+                "/api/settings",
+                Some("tok123"),
+                &rel.to_string()
+            )
+            .status,
+            400
+        );
     }
 
     fn proxy_body(mode: Option<&str>, url: &str) -> String {
@@ -565,49 +688,113 @@ mod tests {
     #[test]
     fn proxy_settings() {
         let c = ctx();
-        let r = call(&c, "POST", "/api/settings", Some("tok123"), &proxy_body(Some("custom"), "socks5h://u:p%40@h.example:1080"));
+        let r = call(
+            &c,
+            "POST",
+            "/api/settings",
+            Some("tok123"),
+            &proxy_body(Some("custom"), "socks5h://u:p%40@h.example:1080"),
+        );
         assert_eq!(r.status, 200);
         let v: Value = serde_json::from_slice(&r.body).unwrap();
         assert_eq!(v["settings"]["proxy_mode"], "custom");
-        assert_eq!(v["settings"]["proxy_url"], "socks5h://u:p%40@h.example:1080");
+        assert_eq!(
+            v["settings"]["proxy_url"],
+            "socks5h://u:p%40@h.example:1080"
+        );
 
-        let r = call(&c, "POST", "/api/settings", Some("tok123"), &proxy_body(Some("custom"), "ftp://h:21"));
+        let r = call(
+            &c,
+            "POST",
+            "/api/settings",
+            Some("tok123"),
+            &proxy_body(Some("custom"), "ftp://h:21"),
+        );
         assert_eq!(r.status, 400);
         let v: Value = serde_json::from_slice(&r.body).unwrap();
-        assert!(v["error"].as_str().unwrap().contains("Unsupported proxy type"));
-        assert_eq!(call(&c, "POST", "/api/settings", Some("tok123"), &proxy_body(Some("custom"), "")).status, 400);
+        assert!(
+            v["error"]
+                .as_str()
+                .unwrap()
+                .contains("Unsupported proxy type")
+        );
+        assert_eq!(
+            call(
+                &c,
+                "POST",
+                "/api/settings",
+                Some("tok123"),
+                &proxy_body(Some("custom"), "")
+            )
+            .status,
+            400
+        );
 
         for m in ["off", "system"] {
-            let r = call(&c, "POST", "/api/settings", Some("tok123"), &proxy_body(Some(m), ""));
+            let r = call(
+                &c,
+                "POST",
+                "/api/settings",
+                Some("tok123"),
+                &proxy_body(Some(m), ""),
+            );
             assert_eq!(r.status, 200, "{m}");
             let v: Value = serde_json::from_slice(&r.body).unwrap();
             assert_eq!(v["settings"]["proxy_mode"], m);
             assert_eq!(v["settings"]["proxy_url"], "");
         }
         // Missing mode keeps System.
-        let r = call(&c, "POST", "/api/settings", Some("tok123"), &proxy_body(None, ""));
+        let r = call(
+            &c,
+            "POST",
+            "/api/settings",
+            Some("tok123"),
+            &proxy_body(None, ""),
+        );
         let v: Value = serde_json::from_slice(&r.body).unwrap();
         assert_eq!(v["settings"]["proxy_mode"], "system");
-        assert_eq!(call(&c, "POST", "/api/settings", Some("tok123"), &proxy_body(Some("bogus"), "")).status, 400);
+        assert_eq!(
+            call(
+                &c,
+                "POST",
+                "/api/settings",
+                Some("tok123"),
+                &proxy_body(Some("bogus"), "")
+            )
+            .status,
+            400
+        );
     }
 
     #[test]
     fn open_requires_finished_download() {
         let c = ctx();
-        assert_eq!(call(&c, "POST", "/api/open", Some("tok123"), r#"{"id":7}"#).status, 409);
-        assert_eq!(call(&c, "POST", "/api/open", Some("tok123"), r#"{"id":99}"#).status, 404);
+        assert_eq!(
+            call(&c, "POST", "/api/open", Some("tok123"), r#"{"id":7}"#).status,
+            409
+        );
+        assert_eq!(
+            call(&c, "POST", "/api/open", Some("tok123"), r#"{"id":99}"#).status,
+            404
+        );
     }
 
     #[test]
     fn static_files_content_types() {
         let c = ctx();
         let r = call(&c, "GET", "/?t=abc&app=1", None, "");
-        assert_eq!((r.status, r.content_type), (200, "text/html; charset=utf-8"));
+        assert_eq!(
+            (r.status, r.content_type),
+            (200, "text/html; charset=utf-8")
+        );
         assert!(String::from_utf8_lossy(&r.body).contains("sushLoad"));
         let r = call(&c, "GET", "/style.css", None, "");
         assert_eq!((r.status, r.content_type), (200, "text/css; charset=utf-8"));
         let r = call(&c, "GET", "/app.js", None, "");
-        assert_eq!((r.status, r.content_type), (200, "text/javascript; charset=utf-8"));
+        assert_eq!(
+            (r.status, r.content_type),
+            (200, "text/javascript; charset=utf-8")
+        );
         assert_eq!(call(&c, "GET", "/nope", None, "").status, 404);
         assert_eq!(call(&c, "GET", "/api/nope", Some("tok123"), "").status, 404);
     }

@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag matches package version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "sushload") | .version')
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "::error::tag $TAG does not match sushload package version $version"
+            exit 1
+          fi
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build
+        run: |
+          cargo build --release --locked -p sushload --target aarch64-apple-darwin
+          cargo build --release --locked -p sushload --target x86_64-apple-darwin
+
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            target/aarch64-apple-darwin/release/sushload \
+            target/x86_64-apple-darwin/release/sushload \
+            -output sushload
+          lipo -info sushload
+
+      - name: Bundle app and DMG
+        run: SUSHLOAD_BIN="$PWD/sushload" scripts/bundle.sh
+
+      - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          base="sushLoad-${TAG}-macos-universal"
+          mv dist/sushLoad.dmg "${base}.dmg"
+          (cd dist && zip -qry "../${base}.app.zip" sushLoad.app)
+          codesign --force --sign - sushload
+          tar -czf "sushload-${TAG}-cli-macos-universal.tar.gz" sushload README.md LICENSE
+          shasum -a 256 "${base}.dmg" "${base}.app.zip" "sushload-${TAG}-cli-macos-universal.tar.gz" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          base="sushLoad-${TAG}-macos-universal"
+          gh release create "$TAG" \
+            "${base}.dmg" "${base}.app.zip" "sushload-${TAG}-cli-macos-universal.tar.gz" SHA256SUMS \
+            --title "sushLoad $TAG" --generate-notes

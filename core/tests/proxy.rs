@@ -1,10 +1,10 @@
 mod common;
 use common::*;
-use sushload_core::{Engine, ProxyMode, Settings};
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use sushload_core::{Engine, ProxyMode, Settings};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;

@@ -5,19 +5,23 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy,
-    NSApplicationDelegate, NSApplicationTerminateReply, NSBackingStoreType, NSColor, NSEventModifierFlags,
-    NSMenu, NSMenuItem, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSApplication,
+    NSApplicationActivationPolicy, NSApplicationDelegate, NSApplicationTerminateReply,
+    NSBackingStoreType, NSColor, NSEventModifierFlags, NSMenu, NSMenuItem, NSWindow,
+    NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     MainThreadMarker, NSError, NSNotification, NSNumber, NSPoint, NSRect, NSSize, NSString, NSURL,
     NSURLRequest, ns_string,
 };
-use objc2_web_kit::{WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKWebView, WKWebViewConfiguration};
-use sushload_core::Engine;
+use objc2_web_kit::{
+    WKScriptMessage, WKScriptMessageHandler, WKUserContentController, WKWebView,
+    WKWebViewConfiguration,
+};
 use std::cell::OnceCell;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use sushload_core::Engine;
 
 static ENGINE: OnceLock<Engine> = OnceLock::new();
 static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -161,7 +165,12 @@ impl Delegate {
         window.setTitlebarAppearsTransparent(true);
         window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
         window.setContentMinSize(NSSize::new(820.0, 520.0));
-        let bg = NSColor::colorWithSRGBRed_green_blue_alpha(30.0 / 255.0, 30.0 / 255.0, 32.0 / 255.0, 1.0);
+        let bg = NSColor::colorWithSRGBRed_green_blue_alpha(
+            30.0 / 255.0,
+            30.0 / 255.0,
+            32.0 / 255.0,
+            1.0,
+        );
         window.setBackgroundColor(Some(&bg));
         if let Some(dark) = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }) {
             window.setAppearance(Some(&dark));
@@ -169,9 +178,10 @@ impl Delegate {
 
         let config = unsafe { WKWebViewConfiguration::new(mtm) };
         unsafe {
-            config
-                .userContentController()
-                .addScriptMessageHandler_name(ProtocolObject::from_ref(self), ns_string!("sushload"));
+            config.userContentController().addScriptMessageHandler_name(
+                ProtocolObject::from_ref(self),
+                ns_string!("sushload"),
+            );
         }
         let web = unsafe {
             WKWebView::initWithFrame_configuration(
@@ -224,7 +234,11 @@ fn menu_item(
     item
 }
 
-fn submenu(mtm: MainThreadMarker, title: &str, items: &[Retained<NSMenuItem>]) -> Retained<NSMenuItem> {
+fn submenu(
+    mtm: MainThreadMarker,
+    title: &str,
+    items: &[Retained<NSMenuItem>],
+) -> Retained<NSMenuItem> {
     let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(title));
     for i in items {
         menu.addItem(i);
@@ -244,13 +258,41 @@ fn build_menu(mtm: MainThreadMarker, app: &NSApplication, delegate: &Delegate) {
         mtm,
         "sushLoad",
         &[
-            menu_item(mtm, "About sushLoad", Some(sel!(orderFrontStandardAboutPanel:)), "", none, None),
+            menu_item(
+                mtm,
+                "About sushLoad",
+                Some(sel!(orderFrontStandardAboutPanel:)),
+                "",
+                none,
+                None,
+            ),
             sep(),
-            menu_item(mtm, "Settings…", Some(sel!(openSettings:)), ",", cmd, Some(target)),
+            menu_item(
+                mtm,
+                "Settings…",
+                Some(sel!(openSettings:)),
+                ",",
+                cmd,
+                Some(target),
+            ),
             sep(),
             menu_item(mtm, "Hide sushLoad", Some(sel!(hide:)), "h", cmd, None),
-            menu_item(mtm, "Hide Others", Some(sel!(hideOtherApplications:)), "h", cmd | NSEventModifierFlags::Option, None),
-            menu_item(mtm, "Show All", Some(sel!(unhideAllApplications:)), "", none, None),
+            menu_item(
+                mtm,
+                "Hide Others",
+                Some(sel!(hideOtherApplications:)),
+                "h",
+                cmd | NSEventModifierFlags::Option,
+                None,
+            ),
+            menu_item(
+                mtm,
+                "Show All",
+                Some(sel!(unhideAllApplications:)),
+                "",
+                none,
+                None,
+            ),
             sep(),
             menu_item(mtm, "Quit sushLoad", Some(sel!(terminate:)), "q", cmd, None),
         ],
@@ -260,22 +302,50 @@ fn build_menu(mtm: MainThreadMarker, app: &NSApplication, delegate: &Delegate) {
         "Edit",
         &[
             menu_item(mtm, "Undo", Some(sel!(undo:)), "z", cmd, None),
-            menu_item(mtm, "Redo", Some(sel!(redo:)), "z", cmd | NSEventModifierFlags::Shift, None),
+            menu_item(
+                mtm,
+                "Redo",
+                Some(sel!(redo:)),
+                "z",
+                cmd | NSEventModifierFlags::Shift,
+                None,
+            ),
             sep(),
             menu_item(mtm, "Cut", Some(sel!(cut:)), "x", cmd, None),
             menu_item(mtm, "Copy", Some(sel!(copy:)), "c", cmd, None),
             menu_item(mtm, "Paste", Some(sel!(paste:)), "v", cmd, None),
-            menu_item(mtm, "Select All", Some(sel!(selectAllRows:)), "a", cmd, Some(target)),
+            menu_item(
+                mtm,
+                "Select All",
+                Some(sel!(selectAllRows:)),
+                "a",
+                cmd,
+                Some(target),
+            ),
         ],
     );
     let window_menu = submenu(
         mtm,
         "Window",
         &[
-            menu_item(mtm, "Minimize", Some(sel!(performMiniaturize:)), "m", cmd, None),
+            menu_item(
+                mtm,
+                "Minimize",
+                Some(sel!(performMiniaturize:)),
+                "m",
+                cmd,
+                None,
+            ),
             menu_item(mtm, "Zoom", Some(sel!(performZoom:)), "", none, None),
             sep(),
-            menu_item(mtm, "sushLoad", Some(sel!(showMainWindow:)), "0", cmd, Some(target)),
+            menu_item(
+                mtm,
+                "sushLoad",
+                Some(sel!(showMainWindow:)),
+                "0",
+                cmd,
+                Some(target),
+            ),
         ],
     );
     let main = NSMenu::new(mtm);

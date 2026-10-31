@@ -5,12 +5,12 @@ mod server;
 mod window;
 
 use serde_json::{Value, json};
-use sushload_core::Engine;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
+use sushload_core::Engine;
 
 const DEFAULT_PORT: u16 = 47815;
 const BUNDLE_ID: &str = "com.soroushdeimi.sushload";
@@ -22,7 +22,11 @@ struct Args {
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut a = Args { web: false, no_open: false, port: DEFAULT_PORT };
+    let mut a = Args {
+        web: false,
+        no_open: false,
+        port: DEFAULT_PORT,
+    };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -45,8 +49,12 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn data_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join("Library").join("Application Support").join("sushLoad")
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    home.join("Library")
+        .join("Application Support")
+        .join("sushLoad")
 }
 
 /// Returns `(port, token)` of a live instance recorded in `instance.json`, if it still answers.

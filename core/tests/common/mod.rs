@@ -2,12 +2,12 @@
 //! behaviour, engine/settings helpers and polling utilities.
 #![allow(dead_code)]
 
-use sushload_core::{DownloadId, DownloadView, Engine, Settings, Status};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
+use sushload_core::{DownloadId, DownloadView, Engine, Settings, Status};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
