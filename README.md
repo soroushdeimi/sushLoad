@@ -4,6 +4,8 @@
 
 A lightweight IDM-style download manager for macOS, written in Rust.
 
+<p align="center"><img src="docs/screenshots/main.png" width="860" alt="sushLoad main window: segmented downloads in progress, a paused and a failed download, and completed ones"></p>
+
 - Segmented downloads over HTTP(S) `Range` requests (1–16 connections), with dynamic splitting:
   a connection that finishes takes half of the largest remaining segment.
 - Pause / resume that survives quitting, crashes and restarts (state in
@@ -13,6 +15,19 @@ A lightweight IDM-style download manager for macOS, written in Rust.
 - Category folders: `~/Downloads/sushLoad/{Video,Music,Documents,Archives,Programs,Images,Other}`.
 - Proxy: system proxy, none, or custom `http://`, `https://`, `socks5://`, `socks5h://` (with user/pass).
 - English and Persian (RTL) UI.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/detail.png" alt="Detail drawer with per-connection segment bar"><br><sub>Detail drawer: URL, path, connections and the live per-segment bar.</sub></td>
+    <td width="50%"><img src="docs/screenshots/add.png" alt="Add downloads dialog"><br><sub>Add one or many links (paste a URL and press Enter).</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/settings.png" alt="Settings page with the proxy group"><br><sub>Settings: folders, queue, speed limit and proxy.</sub></td>
+    <td width="50%"><img src="docs/screenshots/persian.png" alt="Persian right-to-left interface"><br><sub>Persian (RTL) interface.</sub></td>
+  </tr>
+</table>
 
 ## Two ways to run
 
