@@ -198,6 +198,20 @@ impl Default for Settings {
     }
 }
 
+/// A download handed over with browser context (from the browser extension).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AddRequest {
+    pub url: String,
+    /// Overrides the name taken from the URL / Content-Disposition.
+    pub file_name: Option<String>,
+    pub referer: Option<String>,
+    /// `Cookie` header value. Sent only to the URL's own host, never after a redirect to
+    /// another host, and never shown in the UI or in errors.
+    pub cookies: Option<String>,
+    pub user_agent: Option<String>,
+}
+
 /// Read-only snapshot of one download for the UI (`Engine::snapshot`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DownloadView {

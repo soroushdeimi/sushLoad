@@ -5,6 +5,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use sushload_core::{DownloadId, DownloadView, Engine, Settings, Status};
@@ -42,6 +43,28 @@ pub struct Control {
     pub requests: AtomicUsize,
     /// Requests that carried a `Range` header.
     pub range_requests: AtomicUsize,
+    /// When set, every request is answered with a 302 to this absolute URL.
+    pub redirect_to: Mutex<Option<String>>,
+    /// Every request received: `(range header, all headers as lowercase name -> value)`.
+    pub seen: Mutex<Vec<SeenRequest>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SeenRequest {
+    pub range: Option<String>,
+    pub headers: std::collections::HashMap<String, String>,
+}
+
+impl SeenRequest {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).map(String::as_str)
+    }
+}
+
+impl Control {
+    pub fn seen(&self) -> Vec<SeenRequest> {
+        self.seen.lock().unwrap().clone()
+    }
 }
 
 pub struct TestServer {
@@ -135,12 +158,26 @@ async fn serve(mut socket: tokio::net::TcpStream, body: Arc<Vec<u8>>, ctl: Arc<C
     let _method = parts.next();
     let target = parts.next().unwrap_or("/").to_string();
     let mut range = None;
+    let mut headers = std::collections::HashMap::new();
     for line in lines {
-        if let Some((key, value)) = line.split_once(':')
-            && key.eq_ignore_ascii_case("range")
-        {
-            range = Some(value.trim().to_string());
+        if let Some((key, value)) = line.split_once(':') {
+            headers.insert(key.trim().to_ascii_lowercase(), value.trim().to_string());
+            if key.eq_ignore_ascii_case("range") {
+                range = Some(value.trim().to_string());
+            }
         }
+    }
+    ctl.seen.lock().unwrap().push(SeenRequest {
+        range: range.clone(),
+        headers,
+    });
+    let redirect = ctl.redirect_to.lock().unwrap().clone();
+    if let Some(location) = redirect {
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let _ = socket.write_all(response.as_bytes()).await;
+        return;
     }
     if range.is_some() {
         ctl.range_requests.fetch_add(1, Ordering::SeqCst);

@@ -1,7 +1,7 @@
 //! Probing and the actual transfer workers: segmented ranges, dynamic splitting, single-stream
 //! fallback, retries, cancellation, speed sampling and finalisation.
 
-use super::client::Net;
+use super::client::{Net, RequestContext};
 use super::ratelimit::RateLimiter;
 use super::segments;
 use super::util;
@@ -11,7 +11,7 @@ use crate::model::{DownloadId, Status};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use reqwest::header::{
-    ACCEPT_ENCODING, CONTENT_DISPOSITION, CONTENT_RANGE, ETAG, LAST_MODIFIED, RANGE, USER_AGENT,
+    ACCEPT_ENCODING, CONTENT_DISPOSITION, CONTENT_RANGE, ETAG, LAST_MODIFIED, RANGE,
 };
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
@@ -23,8 +23,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-const USER_AGENT_VALUE: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) \
-     Version/17.0 Safari/605.1.15 sushLoad/0.1";
 const MIN_SEGMENTED_TOTAL: u64 = 2 * 1024 * 1024;
 const MAX_ATTEMPTS: u32 = 5;
 const SPEED_TICK: Duration = Duration::from_millis(500);
@@ -150,6 +148,8 @@ async fn run_download(
         old_last_modified,
         old_resumable,
         had_progress,
+        name_fixed,
+        context,
     ) = {
         let mut state = lock(&inner.state);
         let Some(entry) = state.find_mut(id) else {
@@ -174,6 +174,13 @@ async fn run_download(
             record.last_modified.clone(),
             record.resumable,
             had_progress,
+            record.name_fixed,
+            RequestContext::new(
+                &record.url,
+                record.referer.clone(),
+                record.cookies.clone(),
+                record.user_agent.clone(),
+            ),
         )
     };
     inner.persist();
@@ -182,7 +189,10 @@ async fn run_download(
         return Err(DownloadError::Cancelled);
     }
 
-    let net = inner.net().map_err(DownloadError::Failed)?;
+    let net = inner
+        .net()
+        .map_err(DownloadError::Failed)?
+        .with_context(context);
     let probe = probe_with_retry(&net, &url, &mut cancel).await?;
     let settings = { lock(&inner.state).settings.clone() };
 
@@ -195,11 +205,15 @@ async fn run_download(
         let category = categories::classify(&name);
         (current_path, name, category)
     } else {
-        let name = probe
-            .file_name
-            .as_deref()
-            .map(util::sanitize_file_name)
-            .unwrap_or(current_name);
+        let name = if name_fixed {
+            current_name
+        } else {
+            probe
+                .file_name
+                .as_deref()
+                .map(util::sanitize_file_name)
+                .unwrap_or(current_name)
+        };
         let dir = categories::destination_dir(&settings, &name);
         std::fs::create_dir_all(&dir)
             .map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;
@@ -313,8 +327,7 @@ async fn probe_once(
     let request = net
         .get(url)
         .header(RANGE, "bytes=0-0")
-        .header(ACCEPT_ENCODING, "identity")
-        .header(USER_AGENT, USER_AGENT_VALUE);
+        .header(ACCEPT_ENCODING, "identity");
 
     let response = tokio::select! {
         response = request.send() => response,
@@ -613,8 +626,7 @@ async fn serve_segment(
     let request = client
         .get(url)
         .header(RANGE, format!("bytes={next_start}-{end}"))
-        .header(ACCEPT_ENCODING, "identity")
-        .header(USER_AGENT, USER_AGENT_VALUE);
+        .header(ACCEPT_ENCODING, "identity");
 
     let response = tokio::select! {
         response = request.send() => response,
@@ -924,10 +936,7 @@ async fn serve_single(
     cancel: &mut watch::Receiver<bool>,
     expected_total: Option<u64>,
 ) -> Result<(), WorkerError> {
-    let request = client
-        .get(url)
-        .header(ACCEPT_ENCODING, "identity")
-        .header(USER_AGENT, USER_AGENT_VALUE);
+    let request = client.get(url).header(ACCEPT_ENCODING, "identity");
 
     let response = tokio::select! {
         response = request.send() => response,

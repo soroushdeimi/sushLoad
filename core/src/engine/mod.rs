@@ -12,7 +12,7 @@ mod state;
 mod util;
 
 use crate::categories;
-use crate::model::{DownloadId, DownloadView, Settings, Status};
+use crate::model::{AddRequest, DownloadId, DownloadView, Settings, Status};
 use client::Net;
 use ratelimit::RateLimiter;
 use state::{DownloadRecord, StateFile};
@@ -258,15 +258,37 @@ impl Engine {
 
     /// Adds an http(s) URL and queues it. Errors on an invalid URL.
     pub fn add(&self, url: &str) -> Result<DownloadId, String> {
-        let parsed = reqwest::Url::parse(url.trim()).map_err(|e| format!("invalid URL: {e}"))?;
+        self.add_request(AddRequest {
+            url: url.to_string(),
+            ..AddRequest::default()
+        })
+    }
+
+    /// Like `add`, with the browser's file name, Referer, cookies and User-Agent. The file name
+    /// wins over the URL and Content-Disposition; the headers go only to the URL's own origin
+    /// (cookies never follow a redirect to another origin) and are kept in `state.json`
+    /// (owner-only) but never exposed through `DownloadView` or errors.
+    pub fn add_request(&self, request: AddRequest) -> Result<DownloadId, String> {
+        let url = request.url.trim();
+        let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL: {e}"))?;
         if !matches!(parsed.scheme(), "http" | "https") {
             return Err("only http and https URLs are supported".to_string());
         }
         if parsed.host_str().is_none_or(str::is_empty) {
             return Err("URL has no host".to_string());
         }
+        let referer = clean_header(request.referer, "Referer")?;
+        let cookies = clean_header(request.cookies, "cookies")?;
+        let user_agent = clean_header(request.user_agent, "User-Agent")?;
+        let fixed_name = request
+            .file_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(util::sanitize_file_name);
 
-        let file_name = util::file_name_from_url(&parsed);
+        let name_fixed = fixed_name.is_some();
+        let file_name = fixed_name.unwrap_or_else(|| util::file_name_from_url(&parsed));
         let category = categories::classify(&file_name);
         let settings = { lock(&self.inner.state).settings.clone() };
         let path = categories::destination_dir(&settings, &file_name).join(&file_name);
@@ -277,7 +299,7 @@ impl Engine {
         state.downloads.push(Entry {
             record: DownloadRecord {
                 id,
-                url: url.trim().to_string(),
+                url: url.to_string(),
                 file_name,
                 path,
                 category,
@@ -290,6 +312,10 @@ impl Engine {
                 last_modified: None,
                 error: None,
                 added_at: now_secs(),
+                name_fixed,
+                referer,
+                cookies,
+                user_agent,
             },
             speed: 0,
             eta_secs: None,
@@ -468,6 +494,21 @@ impl Engine {
             let _ = ack_rx.recv_timeout(Duration::from_secs(2));
         }
     }
+}
+
+/// Trims a header value; empty means absent. Errors (without echoing the value) when it
+/// cannot be sent as an HTTP header.
+fn clean_header(value: Option<String>, what: &str) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    reqwest::header::HeaderValue::from_str(value)
+        .map_err(|_| format!("{what} contains characters that cannot be sent"))?;
+    Ok(Some(value.to_string()))
 }
 
 fn spawn_saver(data_dir: PathBuf, receiver: std::sync::mpsc::Receiver<SaveRequest>) {

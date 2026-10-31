@@ -3,6 +3,7 @@
 use crate::model::{Category, DownloadId, Segment, Settings, Status};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// One download as stored in `state.json` (no runtime-only fields).
@@ -22,6 +23,16 @@ pub struct DownloadRecord {
     pub last_modified: Option<String>,
     pub error: Option<String>,
     pub added_at: u64,
+    /// The browser gave the file name; Content-Disposition must not change it.
+    #[serde(default)]
+    pub name_fixed: bool,
+    /// Browser context from the extension. Never shown in the UI or in errors.
+    #[serde(default)]
+    pub referer: Option<String>,
+    #[serde(default)]
+    pub cookies: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 /// The on-disk root object.
@@ -56,8 +67,16 @@ pub fn save_bytes(data_dir: &Path, json: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
     let tmp = data_dir.join("state.json.tmp");
     {
-        let mut file = std::fs::File::create(&tmp)
+        // The file may hold cookies: owner-only, also if a stale tmp file existed.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
             .map_err(|e| format!("cannot create {}: {e}", tmp.display()))?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("cannot protect {}: {e}", tmp.display()))?;
         file.write_all(json)
             .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
         file.sync_all()

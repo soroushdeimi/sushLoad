@@ -2,9 +2,51 @@
 //! ever leaking proxy credentials.
 
 use crate::model::{ProxyMode, Settings, validate_proxy_url};
-use reqwest::Client;
+use reqwest::header::{COOKIE, HeaderValue, REFERER, USER_AGENT};
+use reqwest::{Client, RequestBuilder, Url};
 use std::ops::Deref;
+use std::sync::Arc;
 use std::time::Duration;
+
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) \
+     Version/17.0 Safari/605.1.15 sushLoad/0.1";
+
+/// Browser context for one download: sent on every request to the download's own origin
+/// (`Referer`, `User-Agent`) and, for `Cookie`, only to that origin.
+#[derive(Clone, Default)]
+pub(crate) struct RequestContext {
+    pub referer: Option<String>,
+    pub cookies: Option<String>,
+    pub user_agent: Option<String>,
+    /// `scheme://host:port` of the URL the download was added with.
+    pub origin: Option<String>,
+}
+
+impl RequestContext {
+    pub fn new(
+        url: &str,
+        referer: Option<String>,
+        cookies: Option<String>,
+        user_agent: Option<String>,
+    ) -> RequestContext {
+        RequestContext {
+            referer,
+            cookies,
+            user_agent,
+            origin: Url::parse(url).ok().map(|url| origin_of(&url)),
+        }
+    }
+}
+
+/// `scheme://host:port` (default ports filled in) for same-origin checks.
+pub(crate) fn origin_of(url: &Url) -> String {
+    format!(
+        "{}://{}:{}",
+        url.scheme(),
+        url.host_str().unwrap_or_default().to_ascii_lowercase(),
+        url.port_or_known_default().unwrap_or(0)
+    )
+}
 
 /// A ready client plus what is needed to explain errors that came through the proxy.
 #[derive(Clone)]
@@ -14,6 +56,7 @@ pub(crate) struct Net {
     proxy_label: Option<String>,
     /// Raw and decoded passwords to scrub from any message.
     secrets: Vec<String>,
+    context: Option<Arc<RequestContext>>,
 }
 
 impl Deref for Net {
@@ -33,7 +76,56 @@ impl Net {
             client,
             proxy_label: None,
             secrets: Vec::new(),
+            context: None,
         })
+    }
+
+    /// A copy of this client that sends the browser context of one download.
+    pub fn with_context(&self, context: RequestContext) -> Net {
+        let mut net = self.clone();
+        if let Some(cookies) = context.cookies.as_deref().filter(|c| !c.is_empty()) {
+            net.secrets.push(cookies.to_string());
+        }
+        net.context = Some(Arc::new(context));
+        net
+    }
+
+    /// GET `url` with the default User-Agent, or the download's browser context when set.
+    /// `Cookie` is added only when `url` has the download's own origin; redirects to other
+    /// origins are stripped of it by the client's redirect policy.
+    pub fn get(&self, url: &str) -> RequestBuilder {
+        let mut request = self.client.get(url);
+        let mut user_agent = HeaderValue::from_static(DEFAULT_USER_AGENT);
+        if let Some(context) = &self.context {
+            if let Some(value) = context
+                .user_agent
+                .as_deref()
+                .and_then(|v| HeaderValue::from_str(v).ok())
+            {
+                user_agent = value;
+            }
+            if let Some(value) = context
+                .referer
+                .as_deref()
+                .and_then(|v| HeaderValue::from_str(v).ok())
+            {
+                request = request.header(REFERER, value);
+            }
+            let same_origin = Url::parse(url)
+                .ok()
+                .is_some_and(|url| context.origin.as_deref() == Some(origin_of(&url).as_str()));
+            if same_origin
+                && let Some(mut value) = context
+                    .cookies
+                    .as_deref()
+                    .filter(|v| !v.is_empty())
+                    .and_then(|v| HeaderValue::from_str(v).ok())
+            {
+                value.set_sensitive(true);
+                request = request.header(COOKIE, value);
+            }
+        }
+        request.header(USER_AGENT, user_agent)
     }
 
     /// True when a custom proxy is in use and `error` is a failure to connect.
@@ -65,7 +157,12 @@ impl Net {
 }
 
 fn base_builder() -> reqwest::ClientBuilder {
-    Client::builder().connect_timeout(Duration::from_secs(15))
+    // `referer(false)`: keep the Referer the browser sent across redirects instead of
+    // replacing it with the previous hop. reqwest itself drops `Cookie` (and `Authorization`)
+    // on a redirect to another scheme/host/port (see `remove_sensitive_headers`).
+    Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .referer(false)
 }
 
 /// Builds the client for `settings`: system proxy, no proxy, or the custom proxy URL.
@@ -81,6 +178,7 @@ pub(crate) fn build_client(settings: &Settings) -> Result<Net, String> {
                 client,
                 proxy_label: None,
                 secrets: Vec::new(),
+                context: None,
             })
         }
         ProxyMode::Custom => {
@@ -98,6 +196,7 @@ pub(crate) fn build_client(settings: &Settings) -> Result<Net, String> {
                 client,
                 proxy_label: Some(label),
                 secrets,
+                context: None,
             })
         }
     }
