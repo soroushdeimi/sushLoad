@@ -1,0 +1,17 @@
+[package]
+name = "sushload"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+sushload-core = { path = "../core" }
+tiny_http = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-web-kit = "0.3"
+block2 = "0.6"
+libc = "0.2"

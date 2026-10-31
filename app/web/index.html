@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>sushLoad</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand" id="brand">sushLoad</div>
+    <nav id="nav">
+      <button class="nav-item" data-view="all">
+        <svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
+        <span data-i18n="all">All</span><span class="count" data-count="all"></span></button>
+      <button class="nav-item" data-view="downloading">
+        <svg viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10"/></svg>
+        <span data-i18n="downloading">Downloading</span><span class="count" data-count="downloading"></span></button>
+      <button class="nav-item" data-view="queued">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>
+        <span data-i18n="queued">Queued</span><span class="count" data-count="queued"></span></button>
+      <button class="nav-item" data-view="completed">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="m5.5 8.2 1.8 1.8 3.4-3.6"/></svg>
+        <span data-i18n="completed">Completed</span><span class="count" data-count="completed"></span></button>
+      <button class="nav-item" data-view="paused">
+        <svg viewBox="0 0 16 16"><path d="M5.5 3v10M10.5 3v10"/></svg>
+        <span data-i18n="pausedFailed">Paused / Failed</span><span class="count" data-count="paused"></span></button>
+      <div class="section" data-i18n="categories">Categories</div>
+      <button class="nav-item" data-view="cat:video">
+        <svg viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9" rx="2"/><path d="m7 6.3 3 1.7-3 1.7z"/></svg>
+        <span data-i18n="video">Video</span><span class="count" data-count="cat:video"></span></button>
+      <button class="nav-item" data-view="cat:music">
+        <svg viewBox="0 0 16 16"><path d="M6 11.5V3.5l7-1.5v8"/><circle cx="4.5" cy="11.5" r="1.7"/><circle cx="11.5" cy="10" r="1.7"/></svg>
+        <span data-i18n="music">Music</span><span class="count" data-count="cat:music"></span></button>
+      <button class="nav-item" data-view="cat:documents">
+        <svg viewBox="0 0 16 16"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3M6 8h4M6 11h4"/></svg>
+        <span data-i18n="documents">Documents</span><span class="count" data-count="cat:documents"></span></button>
+      <button class="nav-item" data-view="cat:archives">
+        <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="3" rx="1"/><path d="M3 6v7h10V6M6.5 9h3"/></svg>
+        <span data-i18n="archives">Archives</span><span class="count" data-count="cat:archives"></span></button>
+      <button class="nav-item" data-view="cat:programs">
+        <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="m5.5 7 1.7 1.3L5.5 9.6M8.5 10h2.2"/></svg>
+        <span data-i18n="programs">Programs</span><span class="count" data-count="cat:programs"></span></button>
+      <button class="nav-item" data-view="cat:images">
+        <svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="2"/><circle cx="6" cy="6.5" r="1.1"/><path d="m3 12 3.5-3 2.5 2 2-1.5 3 2.5"/></svg>
+        <span data-i18n="images">Images</span><span class="count" data-count="cat:images"></span></button>
+      <button class="nav-item" data-view="cat:other">
+        <svg viewBox="0 0 16 16"><path d="M3 4.5A1.5 1.5 0 0 1 4.5 3H7l1.5 2H12a1.5 1.5 0 0 1 1.5 1.5V11.5A1.5 1.5 0 0 1 12 13H4.5A1.5 1.5 0 0 1 3 11.5z"/></svg>
+        <span data-i18n="other">Other</span><span class="count" data-count="cat:other"></span></button>
+    </nav>
+    <div class="sidebar-bottom">
+      <button class="nav-item" data-view="settings">
+        <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg>
+        <span data-i18n="settings">Settings</span></button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div class="drag" id="dragbar"></div>
+    <header class="top">
+      <div class="titles">
+        <div class="h1" id="title">All</div>
+        <div class="sub" id="subtitle"></div>
+      </div>
+      <input type="search" id="filter" class="field" data-i18n-ph="filter" placeholder="Filter…" autocomplete="off" spellcheck="false">
+    </header>
+
+    <section id="page-downloads" class="page">
+      <div class="card status" id="statusCard">
+        <div class="status-row">
+          <div class="speed-col">
+            <div class="speed-big"><span id="speedBig">0 B/s</span></div>
+            <div class="muted small" id="proxyNote" hidden></div>
+          </div>
+          <div class="status-meta">
+            <div class="muted" id="activeText"></div>
+            <span class="pill pill-idle" id="statePill">Idle</span>
+          </div>
+          <div class="spacer"></div>
+          <button class="btn" id="btnPauseAll" data-i18n="pauseAll">Pause all</button>
+          <button class="btn" id="btnResumeAll" data-i18n="resumeAll">Resume all</button>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button class="btn primary" id="btnAdd" data-i18n="addUrl">Add URL…</button>
+        <button class="btn" id="btnResume" data-i18n="resume">Resume</button>
+        <button class="btn" id="btnPause" data-i18n="pause">Pause</button>
+        <button class="btn" id="btnRemove" data-i18n="remove">Remove</button>
+        <button class="btn icon" id="btnMore" aria-label="More">•••</button>
+      </div>
+
+      <div class="table-wrap" id="tableWrap">
+        <div class="thead">
+          <div class="c-name" data-i18n="name">Name</div>
+          <div class="c-size" data-i18n="size">Size</div>
+          <div class="c-prog" data-i18n="progress">Progress</div>
+          <div class="c-speed" data-i18n="speed">Speed</div>
+          <div class="c-eta" data-i18n="eta">ETA</div>
+          <div class="c-status" data-i18n="status">Status</div>
+        </div>
+        <div class="tbody" id="tbody"></div>
+        <div class="empty" id="empty">
+          <div class="empty-icon"><svg viewBox="0 0 16 16"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10"/></svg></div>
+          <div class="empty-title" id="emptyTitle">No downloads yet</div>
+          <div class="muted" id="emptyText">Paste a link or press ⌘N to start.</div>
+          <button class="btn primary" id="btnAdd2" data-i18n="addUrl">Add URL…</button>
+        </div>
+      </div>
+
+      <div class="drawer" id="drawer" hidden>
+        <div class="drawer-grid">
+          <div class="dk" data-i18n="file">File</div><div class="dv wide" id="dFile"></div>
+          <div class="dk" data-i18n="url">URL</div><div class="dv mono wide" id="dUrl"></div>
+          <div class="dk" data-i18n="path">Path</div><div class="dv mono wide" id="dPath"></div>
+          <div class="dk" data-i18n="connections">Connections</div><div class="dv" id="dConn"></div>
+          <div class="dk" data-i18n="resumable">Resumable</div><div class="dv" id="dRes"></div>
+          <div class="dk" id="dErrK" data-i18n="error">Error</div><div class="dv err wide" id="dErr"></div>
+        </div>
+        <div class="bar big" id="dBar" data-big="1"></div>
+      </div>
+    </section>
+
+    <section id="page-settings" class="page" hidden>
+      <div class="card form">
+        <div class="frow">
+          <div class="flabel"><div data-i18n="downloadFolder">Download folder</div></div>
+          <div class="fctl dir">
+            <input class="field" id="sDir" spellcheck="false" dir="ltr">
+            <button class="btn" id="sChoose" data-i18n="choose">Choose…</button>
+          </div>
+        </div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="sortCats">Sort into category folders</div>
+            <div class="muted small" data-i18n="sortCatsHint">Video, Music, Documents… each in its own sub-folder.</div></div>
+          <div class="fctl"><button class="switch" id="sSort" role="switch" aria-checked="false"><i></i></button></div>
+        </div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="maxConcurrent">Concurrent downloads</div></div>
+          <div class="fctl"><input class="field num" id="sConc" type="number" min="1" max="10"></div>
+        </div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="connsPer">Connections per download</div></div>
+          <div class="fctl"><input class="field num" id="sConns" type="number" min="1" max="16"></div>
+        </div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="speedLimit">Speed limit</div></div>
+          <div class="fctl">
+            <select class="field" id="sLimitMode">
+              <option value="unlimited" data-i18n="unlimited">Unlimited</option>
+              <option value="custom" data-i18n="custom">Custom</option>
+            </select>
+            <input class="field num" id="sLimitVal" type="number" min="1" step="any" value="1">
+            <select class="field" id="sLimitUnit"><option value="KB">KB/s</option><option value="MB">MB/s</option></select>
+          </div>
+        </div>
+        <div class="frow sechead"><div class="flabel"><div class="sectitle" data-i18n="proxy">Proxy</div></div></div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="proxyMode">Connection</div></div>
+          <div class="fctl">
+            <select class="field" id="pMode">
+              <option value="system" data-i18n="proxySystem">System proxy</option>
+              <option value="off" data-i18n="proxyOff">No proxy</option>
+              <option value="custom" data-i18n="proxyCustom">Custom</option>
+            </select>
+          </div>
+        </div>
+        <div id="pCustom" hidden>
+          <div class="frow">
+            <div class="flabel"><div data-i18n="proxyType">Type</div></div>
+            <div class="fctl">
+              <select class="field" id="pType">
+                <option value="http" data-i18n="typeHttp">HTTP</option>
+                <option value="https" data-i18n="typeHttps">HTTPS</option>
+                <option value="socks5" data-i18n="typeSocks5">SOCKS5</option>
+                <option value="socks5h" data-i18n="typeSocks5h">SOCKS5 + remote DNS</option>
+              </select>
+            </div>
+          </div>
+          <div class="frow">
+            <div class="flabel"><div data-i18n="host">Host</div></div>
+            <div class="fctl"><input class="field" id="pHost" dir="ltr" spellcheck="false" autocomplete="off" placeholder="127.0.0.1">
+              <input class="field num" id="pPort" type="number" min="1" max="65535" dir="ltr" data-i18n-ph="port" placeholder="Port"></div>
+          </div>
+          <div class="frow">
+            <div class="flabel"><div data-i18n="username">Username</div><div class="muted small" data-i18n="optional">Optional</div></div>
+            <div class="fctl"><input class="field" id="pUser" dir="ltr" spellcheck="false" autocomplete="off"></div>
+          </div>
+          <div class="frow">
+            <div class="flabel"><div data-i18n="password">Password</div><div class="muted small" data-i18n="optional">Optional</div></div>
+            <div class="fctl"><input class="field" id="pPass" type="password" dir="ltr" autocomplete="new-password"></div>
+          </div>
+          <div class="frow">
+            <div class="flabel"></div>
+            <div class="fctl"><button class="btn primary" id="pApply" data-i18n="apply">Apply</button></div>
+          </div>
+          <div class="frow"><div class="small" id="pMsg"></div></div>
+        </div>
+        <div class="frow"><div class="muted small" data-i18n="proxyHint">Applies to new connections; running downloads keep their connection until paused.</div></div>
+        <div class="frow">
+          <div class="flabel"><div data-i18n="language">Language</div></div>
+          <div class="fctl">
+            <select class="field" id="sLang"><option value="en">English</option><option value="fa">فارسی</option></select>
+          </div>
+        </div>
+        <div class="frow last"><div class="muted small" id="sMsg"></div></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="overlay" class="overlay" hidden>
+  <div class="sheet" id="sheet"></div>
+</div>
+<div id="ctx" class="ctxmenu" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<script src="/app.js"></script>
+</body>
+</html>
