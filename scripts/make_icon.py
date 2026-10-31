@@ -1,47 +1,55 @@
 #!/usr/bin/env python3
-"""Writes a 1024x1024 PNG app icon (blue rounded square, white down-arrow) using only the stdlib."""
-import math
-import struct
+"""Turns the full-bleed artwork (assets/logo.png) into a macOS app icon: the artwork is clipped to
+Apple's 824px rounded-square grid inside a 1024px canvas with a soft drop shadow, then written as
+assets/AppIcon.png and assets/AppIcon.icns. Needs Pillow; only run when the logo changes."""
+import shutil
+import subprocess
 import sys
-import zlib
+import tempfile
+from pathlib import Path
 
-N = 1024
+from PIL import Image, ImageDraw, ImageFilter
 
+ROOT = Path(__file__).resolve().parent.parent
+SRC = ROOT / "assets" / "logo.png"
+OUT_PNG = ROOT / "assets" / "AppIcon.png"
+OUT_ICNS = ROOT / "assets" / "AppIcon.icns"
 
-def pixel(x, y):
-    # rounded square mask
-    r = 230
-    cx = min(max(x, r), N - 1 - r)
-    cy = min(max(y, r), N - 1 - r)
-    if math.hypot(x - cx, y - cy) > r:
-        return (0, 0, 0, 0)
-    t = y / N
-    base = (int(40 + 0 * t), int(150 - 60 * t), int(255 - 20 * t))
-    # arrow: shaft + head + tray
-    u, v = x - N / 2, y - N / 2
-    shaft = abs(u) < 60 and -250 < v < 60
-    head = v >= 20 and v < 220 and abs(u) < (220 - v) * 1.0 + 0 and abs(u) <= 220 - (v - 20) * 1.1
-    tray = 230 < v < 290 and abs(u) < 270
-    if shaft or head or tray:
-        return (255, 255, 255, 255)
-    return base + (255,)
+CANVAS, BODY, RADIUS = 1024, 824, 185
+SS = 4  # supersampling for a smooth mask edge
 
 
-def main(out):
-    raw = bytearray()
-    for y in range(N):
-        raw.append(0)
-        for x in range(N):
-            raw.extend(pixel(x, y))
+def rounded_mask(size, radius):
+    big = Image.new("L", (size * SS, size * SS), 0)
+    ImageDraw.Draw(big).rounded_rectangle(
+        (0, 0, size * SS - 1, size * SS - 1), radius=radius * SS, fill=255
+    )
+    return big.resize((size, size), Image.LANCZOS)
 
-    def chunk(tag, data):
-        c = struct.pack(">I", len(data)) + tag + data
-        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
 
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", N, N, 8, 6, 0, 0, 0))
-    png += chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + chunk(b"IEND", b"")
-    open(out, "wb").write(png)
+def main():
+    art = Image.open(SRC).convert("RGBA").resize((BODY, BODY), Image.LANCZOS)
+    mask = rounded_mask(BODY, RADIUS)
+    off = (CANVAS - BODY) // 2
+
+    shadow = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    shadow_body = Image.new("RGBA", (BODY, BODY), (0, 0, 0, 120))
+    shadow.paste(shadow_body, (off, off + 12), mask)
+    icon = shadow.filter(ImageFilter.GaussianBlur(14))
+    icon.paste(art, (off, off), mask)
+    icon.save(OUT_PNG)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        iconset = Path(tmp) / "AppIcon.iconset"
+        iconset.mkdir()
+        for s in (16, 32, 128, 256, 512):
+            icon.resize((s, s), Image.LANCZOS).save(iconset / f"icon_{s}x{s}.png")
+            icon.resize((s * 2, s * 2), Image.LANCZOS).save(iconset / f"icon_{s}x{s}@2x.png")
+        if not shutil.which("iconutil"):
+            sys.exit("iconutil not found (macOS only)")
+        subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(OUT_ICNS)], check=True)
+    print(f"wrote {OUT_PNG.relative_to(ROOT)} and {OUT_ICNS.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main()
