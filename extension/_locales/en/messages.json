@@ -14,47 +14,8 @@
   "menuAll": {
     "message": "Download all links with sushLoad"
   },
-  "offerHeading": {
-    "message": "Download this file with sushLoad?"
-  },
-  "offerUse": {
-    "message": "Download with sushLoad"
-  },
-  "offerChrome": {
-    "message": "Let Chrome download"
-  },
-  "offerRemember": {
-    "message": "Don't ask again for .$P1$",
-    "placeholders": {
-      "p1": {
-        "content": "$1"
-      }
-    }
-  },
-  "offerFrom": {
-    "message": "from $P1$",
-    "placeholders": {
-      "p1": {
-        "content": "$1"
-      }
-    }
-  },
   "offerUnknownSize": {
     "message": "Unknown size"
-  },
-  "offerFailed": {
-    "message": "Couldn't hand it to sushLoad: $P1$ The browser will download it instead.",
-    "placeholders": {
-      "p1": {
-        "content": "$1"
-      }
-    }
-  },
-  "offerSending": {
-    "message": "Sending…"
-  },
-  "offerClose": {
-    "message": "Close"
   },
   "popupCapture": {
     "message": "Take over downloads"
@@ -173,12 +134,6 @@
   "optCaptureHint": {
     "message": "Take over matching browser downloads and hand them to sushLoad. Hold Alt while clicking a link to skip this once."
   },
-  "optAsk": {
-    "message": "Ask in the browser first"
-  },
-  "optAskHint": {
-    "message": "Off (default): matching downloads go straight to sushLoad, which asks for the name and folder. On: the browser asks first, then sushLoad asks too."
-  },
   "optTypes": {
     "message": "File types"
   },
@@ -200,23 +155,8 @@
   "optSitesHint": {
     "message": "One host per line, like example.com (subdomains included)."
   },
-  "optRemembered": {
-    "message": "Remembered choices"
-  },
-  "optRememberedNone": {
-    "message": "None"
-  },
-  "optForget": {
-    "message": "Forget remembered choices"
-  },
   "optSaved": {
     "message": "Saved"
-  },
-  "choiceSush": {
-    "message": "sushLoad"
-  },
-  "choiceChrome": {
-    "message": "browser"
   },
   "popupConfirmNote": {
     "message": "sushLoad will ask where to save each download."

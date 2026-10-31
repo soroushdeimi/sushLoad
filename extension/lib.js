@@ -19,7 +19,6 @@ export const categoryOf = ext => EXT_CATEGORY.get(ext) || 'other';
 
 export const DEFAULTS = {
   enabled: true,
-  askFirst: false,
   exts: [...CATEGORIES.archives, ...CATEGORIES.programs, ...CATEGORIES.video, ...CATEGORIES.music],
   docExts: [...CATEGORIES.documents],
   minSizeMB: 1,
@@ -31,11 +30,6 @@ export async function getSettings() {
   return { ...DEFAULTS, ...(settings || {}) };
 }
 export const saveSettings = settings => chrome.storage.local.set({ settings });
-export async function getDecisions() {
-  const { decisions } = await chrome.storage.local.get('decisions');
-  return decisions || {};
-}
-export const saveDecisions = decisions => chrome.storage.local.set({ decisions });
 
 export function parseList(text) {
   return [...new Set(String(text).toLowerCase().split(/[\s,;]+/).map(s => s.replace(/^\*?\./, '')).filter(Boolean))];

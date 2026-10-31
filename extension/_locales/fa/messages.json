@@ -14,47 +14,8 @@
   "menuAll": {
     "message": "دانلود همهٔ لینک‌ها با sushLoad"
   },
-  "offerHeading": {
-    "message": "این فایل با sushLoad دانلود شود؟"
-  },
-  "offerUse": {
-    "message": "دانلود با sushLoad"
-  },
-  "offerChrome": {
-    "message": "بگذار مرورگر دانلود کند"
-  },
-  "offerRemember": {
-    "message": "برای «.$P1$» دیگر نپرس",
-    "placeholders": {
-      "p1": {
-        "content": "$1"
-      }
-    }
-  },
-  "offerFrom": {
-    "message": "از $P1$",
-    "placeholders": {
-      "p1": {
-        "content": "$1"
-      }
-    }
-  },
   "offerUnknownSize": {
     "message": "حجم نامشخص"
-  },
-  "offerFailed": {
-    "message": "تحویل به sushLoad ممکن نشد: $P1$ مرورگر خودش دانلود می‌کند.",
-    "placeholders": {
-      "p1": {
-        "content": "$1"
-      }
-    }
-  },
-  "offerSending": {
-    "message": "در حال ارسال…"
-  },
-  "offerClose": {
-    "message": "بستن"
   },
   "popupCapture": {
     "message": "گرفتن دانلودها"
@@ -173,12 +134,6 @@
   "optCaptureHint": {
     "message": "دانلودهای مطابق مرورگر را می‌گیرد و به sushLoad می‌دهد. برای یک بار رد شدن، هنگام کلیک روی لینک Alt را نگه دارید."
   },
-  "optAsk": {
-    "message": "ابتدا در مرورگر بپرس"
-  },
-  "optAskHint": {
-    "message": "خاموش (پیش‌فرض): دانلودهای مطابق مستقیم به sushLoad می‌روند و خود sushLoad نام و پوشه را می‌پرسد. روشن: ابتدا مرورگر می‌پرسد و بعد sushLoad هم می‌پرسد."
-  },
   "optTypes": {
     "message": "نوع فایل‌ها"
   },
@@ -200,23 +155,8 @@
   "optSitesHint": {
     "message": "هر خط یک میزبان، مثل example.com (زیردامنه‌ها هم شامل می‌شوند)."
   },
-  "optRemembered": {
-    "message": "انتخاب‌های ذخیره‌شده"
-  },
-  "optRememberedNone": {
-    "message": "هیچ"
-  },
-  "optForget": {
-    "message": "فراموش کردن انتخاب‌ها"
-  },
   "optSaved": {
     "message": "ذخیره شد"
-  },
-  "choiceSush": {
-    "message": "sushLoad"
-  },
-  "choiceChrome": {
-    "message": "مرورگر"
   },
   "popupConfirmNote": {
     "message": "sushLoad برای هر دانلود محل ذخیره را می‌پرسد."

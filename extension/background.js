@@ -1,6 +1,6 @@
 // sushLoad service worker. Event-driven only: no timers, no polling; it sleeps between events.
 import {
-  msg, getSettings, getDecisions, saveDecisions, isHttp, hostOf, hostMatches, baseName, nameFromUrl,
+  msg, getSettings, isHttp, hostOf, hostMatches, baseName, nameFromUrl,
   classify, buildItem, handover, describeError,
 } from './lib.js';
 
@@ -94,9 +94,6 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
   if (!m || typeof m !== 'object') return;
   if (m.t === 'alt') {
     attempt(session.set({ altAt: Date.now() }));
-  } else if (m.t === 'offer-choice') {
-    onChoice(m).then(reply, e => reply({ ok: false, error: String(e) }));
-    return true;
   } else if (m.t === 'panel-click') {
     onPanelClick(sender).then(reply, e => reply({ ok: false, error: String(e) }));
     return true;
@@ -109,7 +106,7 @@ async function onCreated(item) {
   if (item.incognito || item.byExtensionId || item.state !== 'in_progress') return;
   const url = item.finalUrl || item.url;
   if (!isHttp(url)) return;
-  const [s, decisions, { altAt }] = await Promise.all([getSettings(), getDecisions(), session.get('altAt')]);
+  const [s, { altAt }] = await Promise.all([getSettings(), session.get('altAt')]);
   if (!s.enabled) return;
   if (altAt && Date.now() - altAt < 4000) return;
   if (hostMatches(hostOf(url), s.sites) || hostMatches(hostOf(item.referrer), s.sites)) return;
@@ -121,7 +118,7 @@ async function onCreated(item) {
   const mime = (got && got.mime) || cur.mime;
   const size = cur.fileSize > 0 ? cur.fileSize : cur.totalBytes > 0 ? cur.totalBytes : -1;
   const c = classify(name, mime, size, s);
-  if (!c.match || decisions[c.ext] === 'chrome') return;
+  if (!c.match) return;
 
   await attempt(chrome.downloads.pause(item.id));
   let referrer = item.referrer;
@@ -129,18 +126,11 @@ async function onCreated(item) {
   if (!referrer) referrer = t && isHttp(t.url) ? t.url : '';
   // The tab's title helps sushLoad group the site; only when that tab is the referring page.
   const title = t && t.title && referrer && (t.url || '').split('#')[0] === referrer.split('#')[0] ? t.title : '';
-  const offer = { id: item.id, url, name: name || 'download', size, host: hostOf(url), referrer, title, ext: c.ext };
-  if (decisions[c.ext] === 'sush' || !s.askFirst) {
-    const r = await takeOver(offer);
-    if (r.ok) ok(-1);
-    else { attempt(chrome.downloads.resume(item.id)); fail(-1); }
-    return;
-  }
-  await session.set({ ['offer:' + item.id]: offer });
-  const w = await chrome.windows.create({
-    url: chrome.runtime.getURL('offer.html?id=' + item.id), type: 'popup', width: 420, height: 250, focused: true,
-  });
-  await session.set({ ['offerwin:' + w.id]: item.id });
+  // One prompt only: sushLoad's own Download File Info dialog (when enabled in the app).
+  const offer = { id: item.id, url, name: name || 'download', referrer, title };
+  const r = await takeOver(offer);
+  if (r.ok) ok(-1);
+  else { attempt(chrome.downloads.resume(item.id)); fail(-1); }
 }
 
 async function takeOver(offer) {
@@ -155,40 +145,6 @@ async function takeOver(offer) {
   }
   return r;
 }
-
-async function popOffer(id) {
-  const key = 'offer:' + id;
-  const o = (await session.get(key))[key];
-  await session.remove(key);
-  return o;
-}
-
-async function onChoice({ id, choice, remember }) {
-  const o = await popOffer(id);
-  if (!o) return { ok: true };
-  if (remember && o.ext) {
-    const d = await getDecisions();
-    d[o.ext] = choice === 'sush' ? 'sush' : 'chrome';
-    await saveDecisions(d);
-  }
-  if (choice !== 'sush') {
-    await attempt(chrome.downloads.resume(id));
-    return { ok: true };
-  }
-  const r = await takeOver(o);
-  if (r.ok) return { ok: true };
-  await attempt(chrome.downloads.resume(id));
-  return { ok: false, error: describeError(r) };
-}
-
-// Closing the offer window without choosing = let the browser carry on.
-chrome.windows.onRemoved.addListener(async windowId => {
-  const key = 'offerwin:' + windowId;
-  const id = (await session.get(key))[key];
-  if (id === undefined) return;
-  await session.remove(key);
-  if (await popOffer(id)) await attempt(chrome.downloads.resume(id));
-});
 
 /* ---------- video panel ---------- */
 const SEGMENT_EXT = /\.(m3u8|mpd|ts|m4s|cmfv|cmfa|aac|vtt)$/;

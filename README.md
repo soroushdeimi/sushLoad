@@ -49,12 +49,6 @@ that need a login work; cookies are only ever sent to the link's own site.
 2. Open `chrome://extensions`, turn on *Developer mode*, *Load unpacked*, and pick the
    `extension` folder (sushLoad › Settings › Browser › *Show extension folder*).
 
-### Ask in the browser first
-
-By default a download that matches the extension's file types goes straight to sushLoad, which
-then asks for the name and folder. Turn on *Ask in the browser first* in the extension's options
-to get Chrome's own prompt first (then sushLoad asks too).
-
 ## Download File Info
 
 New downloads (from the browser, a pasted link or *Add URL…*) open a **Download File Info**
